@@ -7,15 +7,17 @@ import { tooBig, hashOf, parseFileCounts, redact, withKey, checkTorboxKey } from
 
 const TIMEOUT_MS = 20000
 const COUNT_TTL_MS = 24 * 3600 * 1000
-const countCache = new Map() // hash -> { count, at }
+const COUNT_CACHE_MAX = 20000
+const countCache = new Map() // hash -> { count, at }, oldest first
 const stats = { since: Date.now(), lookups: 0, found: 0, hidden: 0, recent: [] } // for the status page
 
 function settings(env) {
+  const maxFiles = Number(env.MAX_FILES)
   return {
     upstream: (env.UPSTREAM ?? 'https://torrentio.strem.fun').replace(/\/$/, ''),
     torbox: (env.TORBOX_API ?? 'https://api.torbox.app').replace(/\/$/, ''),
     key: env.TORBOX_KEY || null,
-    maxFiles: Number(env.MAX_FILES ?? 100),
+    maxFiles: Number.isInteger(maxFiles) && maxFiles > 0 ? maxFiles : 100,
     heuristics: env.HEURISTICS !== '0',
   }
 }
@@ -44,13 +46,22 @@ async function fileCounts(hashes, opts) {
         signal: AbortSignal.timeout(8000),
       })
       if (!r.ok) throw new Error(`TorBox ${r.status}`)
-      for (const [h, count] of parseFileCounts(await r.json())) countCache.set(h, { count, at: now })
+      for (const [h, count] of parseFileCounts(await r.json())) {
+        countCache.delete(h) // re-insert so the Map stays ordered oldest first
+        countCache.set(h, { count, at: now })
+      }
     } catch (e) {
       console.error('file count lookup failed:', redact(String(e.message)))
       break
     }
   }
-  return new Map(hashes.filter(fresh).map((h) => [h, countCache.get(h).count]))
+  const out = new Map(hashes.filter(fresh).map((h) => [h, countCache.get(h).count]))
+  // The server runs for months, so keep the cache bounded: drop the oldest entries.
+  for (const h of countCache.keys()) {
+    if (countCache.size <= COUNT_CACHE_MAX) break
+    countCache.delete(h)
+  }
+  return out
 }
 
 async function handleStream(opts, config, type, id) {
@@ -109,7 +120,7 @@ export default {
 }
 
 // Status page. Builds the install link in the browser; titles and posters for the recent list
-// come from Stremio's Cinemeta.
+// come from Stremio's Cinemeta and Kitsu add-ons.
 const landing = String.raw`<!doctype html><html lang=en><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1">
 <title>Torrentio Filter</title>
 <style>
@@ -172,8 +183,9 @@ function pill(id, cls, text) { $(id).className = 'pill ' + cls; $(id).textConten
 
 function update() {
   const m = /torrentio\.strem\.fun\/(?:(.+)\/)?manifest\.json/.exec($('link').value)
+  let parts = []
   // The key in a pasted link is dropped: the server adds the one from setup.
-  const parts = m && m[1] ? decodeURIComponent(m[1]).split('|').filter((p) => p && !DEBRID.test(p)) : []
+  try { parts = m && m[1] ? decodeURIComponent(m[1]).split('|').filter((p) => p && !DEBRID.test(p)) : [] } catch {}
   $('out').textContent = location.origin + (parts.length ? '/' + encodeURIComponent(parts.join('|')) : '') + '/manifest.json'
 }
 $('link').oninput = update
@@ -187,41 +199,58 @@ $('copy').onclick = async () => {
 
 fetch('/health').then((r) => r.json()).then((h) => {
   pill('s-torrentio', h.torrentio === 200 ? 'ok' : 'bad', h.torrentio === 200 ? 'Torrentio reachable' : 'Torrentio not answering (' + h.torrentio + ')')
-  const tb = { ok: ['ok', 'TorBox key works'], invalid: ['bad', 'TorBox key rejected'], unreachable: ['', 'TorBox not answering'], 'not set': ['bad', 'No TorBox key'] }[h.torbox]
+  const tb = { ok: ['ok', 'TorBox key works'], invalid: ['bad', 'TorBox key rejected'], 'not set': ['bad', 'No TorBox key'] }[h.torbox] || ['', 'TorBox not answering']
   pill('s-torbox', tb[0], tb[1])
   if (h.torbox === 'invalid' || h.torbox === 'not set') $('hint').textContent = 'Results won\'t play until a working key is set. In Terminal: torrentio-filter key'
-}).catch(() => pill('s-server', 'bad', 'Filter not answering'))
+}).catch(() => {
+  pill('s-server', 'bad', 'Filter not answering')
+  pill('s-torrentio', '', 'Torrentio unknown')
+  pill('s-torbox', '', 'TorBox unknown')
+})
 
 const names = new Map()
-async function nameOf(type, id) {
-  const imdb = id.split(':')[0]
-  if (!/^tt\d+$/.test(imdb)) return { name: id }
-  const k = (type === 'movie' ? 'movie' : 'series') + '/' + imdb
-  if (!names.has(k)) names.set(k, fetch('https://v3-cinemeta.strem.io/meta/' + k + '.json').then((r) => r.json()).then((j) => j.meta || {}).catch(() => ({})))
-  return names.get(k)
+// Name and poster: Cinemeta for IMDb ids, Stremio's Kitsu add-on for anime.
+function nameOf(type, id) {
+  const p = id.split(':')
+  const url = p[0] === 'kitsu' ? 'https://anime-kitsu.strem.fun/meta/anime/kitsu:' + p[1] + '.json'
+    : /^tt\d+$/.test(p[0]) ? 'https://v3-cinemeta.strem.io/meta/' + (type === 'movie' ? 'movie' : 'series') + '/' + p[0] + '.json'
+    : null
+  if (!url) return Promise.resolve({})
+  if (!names.has(url)) names.set(url, fetch(url).then((r) => r.json()).then((j) => j.meta || {}).catch(() => ({})))
+  return names.get(url)
 }
 function ago(t) {
   const s = Math.round((Date.now() - t) / 1000)
   return s < 60 ? 'just now' : s < 3600 ? Math.round(s / 60) + ' min ago' : s < 86400 ? Math.round(s / 3600) + ' h ago' : Math.round(s / 86400) + ' d ago'
 }
+// Ids are tt123 (movie), tt123:season:episode (series) or kitsu:123:episode (anime).
+function episodeOf(id) {
+  const p = id.split(':')
+  if (p[0] === 'kitsu') return p[2] ? ' · Episode ' + p[2] : ''
+  return p[2] ? ' · S' + p[1] + 'E' + p[2] : ''
+}
+let shown = ''
 async function loadStats() {
   const r = await fetch('/stats').catch(() => null)
   if (!r || !r.ok) return
   const st = await r.json()
   $('stats').hidden = false
+  // Re-render only when something changed, so posters don't flicker. Minutes keep the "ago" text fresh.
+  const sig = JSON.stringify(st) + Math.floor(Date.now() / 60000)
+  if (sig === shown) return
+  shown = sig
   $('n-lookups').textContent = st.lookups
   $('n-found').textContent = st.found
   $('n-hidden').textContent = st.hidden
   $('since').textContent = 'Since ' + new Date(st.since).toLocaleString() + (st.recent.length ? '' : '. Open something in Stremio and it shows up here.')
   const items = await Promise.all(st.recent.map(async (x) => {
     const meta = await nameOf(x.type, x.id)
-    const [, season, episode] = x.id.split(':')
     const li = document.createElement('li')
     const img = document.createElement(meta.poster ? 'img' : 'div')
-    if (meta.poster) { img.src = meta.poster; img.alt = '' } else img.className = 'ph'
+    if (meta.poster) { img.src = meta.poster; img.alt = ''; img.loading = 'lazy' } else img.className = 'ph'
     const text = document.createElement('div')
     const t = document.createElement('div'); t.className = 't'
-    t.textContent = (meta.name || x.id) + (season ? ' · S' + season + 'E' + episode : '')
+    t.textContent = (meta.name || x.id) + episodeOf(x.id)
     const m = document.createElement('div'); m.className = 'm'
     m.textContent = x.found + ' found · ' + x.hidden + ' hidden · ' + ago(x.at)
     text.append(t, m); li.append(img, text)

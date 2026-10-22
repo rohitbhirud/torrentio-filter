@@ -30,12 +30,17 @@ const warn = (s) => console.log(`${yellow('!')} ${s}`)
 const fail = (s) => { console.error(`${red('✗')} ${s}`); process.exit(1) }
 const step = (s) => console.log(`${purple('›')} ${s}`)
 
+// Resolves '' when input ends (Ctrl+D, or nothing piped in). Ctrl+C quits.
 function ask(question, { hidden = false } = {}) {
   return new Promise((resolve) => {
     const rl = readline.createInterface({ input: process.stdin, output: process.stdout, terminal: Boolean(process.stdin.isTTY) })
+    let answered = false
     let muted = false
-    rl._writeToOutput = (s) => rl.output.write(muted && !/^\r?\n$/.test(s) ? '•'.repeat(s.length) : s)
-    rl.question(question, (answer) => { rl.close(); resolve(answer.trim()) })
+    // While hidden, whatever readline draws (typing, backspace, paste) becomes the prompt plus one dot per character.
+    rl._writeToOutput = (s) => rl.output.write(!muted || /^\r?\n$/.test(s) ? s : `\r\x1b[2K${question}${'•'.repeat(rl.line.length)}`)
+    rl.on('SIGINT', () => { rl.output.write('\n'); process.exit(130) })
+    rl.once('close', () => { if (!answered) { rl.output.write('\n'); resolve('') } })
+    rl.question(question, (answer) => { answered = true; rl.close(); resolve(answer.trim()) })
     muted = hidden
   })
 }
@@ -72,7 +77,10 @@ async function health(p = port(), waitMs = 0) {
 }
 
 async function askKey(current) {
-  if (process.env.TORBOX_KEY) return process.env.TORBOX_KEY // non-interactive, used as is
+  if (process.env.TORBOX_KEY) {
+    warn('Using the TorBox key from the TORBOX_KEY environment variable')
+    return process.env.TORBOX_KEY
+  }
   if (current && (await ask(`Keep the TorBox key already set up? ${dim('(Y/n)')} `)).toLowerCase() !== 'n') return current
   console.log(dim('Find it at torbox.app → Settings → API Key. Typing is hidden.'))
   for (let tries = 0; tries < 3; tries++) {
@@ -115,17 +123,23 @@ function writePlist() {
 `)
 }
 
-function stopService() {
+// Stops this service and the older hand-made one. Their plists stay, so restoreServices() can bring them back.
+function stopServices() {
   launchctl('bootout', `${DOMAIN}/${LABEL}`)
-  if (fs.existsSync(LEGACY)) {
-    launchctl('bootout', `${DOMAIN}/com.user.torrentio-filter`)
-    fs.rmSync(LEGACY)
-    warn('Replaced the older torrentio-filter service. Reinstall the add-on in Stremio with the new link.')
-  }
+  if (fs.existsSync(LEGACY)) launchctl('bootout', `${DOMAIN}/com.user.torrentio-filter`)
 }
 
-function startService() {
-  if (launchctl('bootstrap', DOMAIN, PLIST) === null && !running()) fail(`launchd refused to start it. Check ${PLIST}`)
+function restoreServices() {
+  for (const plist of [PLIST, LEGACY]) if (fs.existsSync(plist)) launchctl('bootstrap', DOMAIN, plist)
+}
+
+// launchd can refuse a bootstrap right after a bootout while it finishes tearing down, so retry briefly.
+async function startService() {
+  for (let i = 0; i < 5; i++) {
+    if (launchctl('bootstrap', DOMAIN, PLIST) !== null || running()) return
+    await sleep(500)
+  }
+  fail(`launchd refused to start it. Check ${PLIST}`)
 }
 
 function printStatus(h, p) {
@@ -151,8 +165,11 @@ const commands = {
     const p = Number(flag > -1 ? process.argv[flag + 1] : current.PORT ?? 7171)
     if (!Number.isInteger(p) || p < 1024 || p > 65535) fail('--port needs a number from 1024 to 65535')
     step('Stopping any running copy')
-    stopService()
-    if (!(await portFree(p))) fail(`Port ${p} is in use by another app. Pick another: torrentio-filter setup --port 7272`)
+    stopServices()
+    if (!(await portFree(p))) {
+      restoreServices()
+      fail(`Port ${p} is in use by another app. Pick another: torrentio-filter setup --port 7272`)
+    }
 
     step(`Installing to ${dim(APP)}`)
     fs.mkdirSync(APP, { recursive: true })
@@ -161,10 +178,14 @@ const commands = {
     writeConfig({ ...current, TORBOX_KEY: key, PORT: String(p) })
     writePlist()
     step('Starting it, and setting it to start at every login')
-    startService()
+    await startService()
 
     const h = await health(p, 10000)
     if (!h) fail(`It didn't come up. Look at the log: torrentio-filter logs`)
+    if (fs.existsSync(LEGACY)) {
+      fs.rmSync(LEGACY)
+      warn('Replaced the older torrentio-filter service. Reinstall the add-on in Stremio with the link below.')
+    }
     console.log()
     printStatus(h, p)
     console.log(`\n  ${bold('Add it to Stremio:')} Add-ons → paste this in the search box → Install\n\n    ${purple(`${url(p)}/manifest.json`)}\n`)
@@ -202,8 +223,10 @@ const commands = {
   },
 
   async uninstall() {
-    stopService()
-    for (const p of [PLIST, APP, LOG]) fs.rmSync(p, { recursive: true, force: true })
+    const paths = [PLIST, LEGACY, APP, LOG].filter((p) => fs.existsSync(p))
+    if (!paths.length) return ok('Nothing to remove: it is not installed.')
+    stopServices()
+    for (const p of paths) fs.rmSync(p, { recursive: true, force: true })
     ok('Removed the service, its settings (including the key) and its log. Remove the add-on in Stremio too.')
   },
 
@@ -220,5 +243,5 @@ const commands = {
   },
 }
 
-const name = process.argv[2] ?? 'help'
+const name = { '-h': 'help', '--help': 'help' }[process.argv[2]] ?? process.argv[2] ?? 'help'
 await (commands[name] ?? (() => fail(`Unknown command "${name}". Try: torrentio-filter help`)))()

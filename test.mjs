@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { tooBig, fileIdxOf, parseFileCounts, hashOf, withKey } from './filter.mjs'
+import { tooBig, fileIdxOf, parseFileCounts, hashOf, withKey, redact } from './filter.mjs'
 
 const s = (name, extra = {}) => ({ title: `${name}\nfile.mkv\n👤 10 💾 1 GB ⚙️ X`, ...extra })
 
@@ -72,4 +72,21 @@ test('a lone archive file is treated as zipped', () => {
   const counts = parseFileCounts({ data: { [h]: { files: [{ name: 'Show (Batch).zip' }] } } })
   assert.equal(counts.get(h), Infinity)
   assert.equal(tooBig({ title: 'Show\nx', infoHash: h }, counts), true)
+})
+
+test('year ranges are not episode ranges', () => {
+  assert.equal(tooBig(s('One Piece (1999-2023) Complete Batch', { fileIdx: 0 })), true) // falls through to the Batch word
+  assert.equal(tooBig(s('Show (2019-2020) S01', { fileIdx: 0 })), false)
+  assert.equal(tooBig(s('Detective Conan 1000-1150', { fileIdx: 0 })), true)
+})
+
+test('a stream with a malformed url does not throw', () => {
+  const bad = { title: 'Show S01\nx', url: 'http://[bad' }
+  assert.equal(hashOf(bad), null)
+  assert.equal(fileIdxOf(bad), null)
+  assert.equal(tooBig(bad), false)
+})
+
+test('redacts keys from log lines', () => {
+  assert.equal(redact('GET /sort=x|torbox=ABC|realdebrid=DEF%7Cy'), 'GET /sort=x|torbox=***|realdebrid=***%7Cy')
 })

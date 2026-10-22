@@ -17,13 +17,15 @@ const torrentio = await listen(http.createServer((req, res) => {
   if (req.url === '/manifest.json') return res.end('{}')
   seen.config = decodeURIComponent(req.url.split('/stream/')[0].slice(1))
   const stream = (h, title) => ({ name: 'T', title: `${title}\nep.mkv\n👤 5 💾 1 GB`, infoHash: h, fileIdx: 3 })
+  if (req.url.includes('/tt-bad-url.json')) return res.end(JSON.stringify({ streams: [{ title: 'Odd\nx', url: 'http://[bad' }, stream(H_PACK, 'Fine')] }))
   res.end(JSON.stringify({ streams: [stream(H_BIG, 'Big pack'), stream(H_PACK, 'Naruto [Complete] [Extras]'), stream(H_NEW, 'Show [Complete]')] }))
 }))
 const torbox = await listen(http.createServer((req, res) => {
   const good = req.headers.authorization === `Bearer ${KEY}`
   if (req.url.startsWith('/v1/api/user/me')) {
-    res.writeHead(good ? 200 : 401)
-    return res.end(JSON.stringify({ success: good }))
+    if (req.headers.authorization === 'Bearer RATE-LIMITED') return res.writeHead(429).end('{}')
+    res.writeHead(good ? 200 : 403) // TorBox answers a bad key with 403 BAD_TOKEN
+    return res.end(JSON.stringify({ success: good, error: good ? null : 'BAD_TOKEN' }))
   }
   seen.auth = req.headers.authorization
   seen.hashes = new URL(req.url, 'http://x').searchParams.getAll('hash')
@@ -66,6 +68,25 @@ test('serves the manifest, health and stats', async () => {
   const stats = await (await fetch(`${at(withKey)}/stats`)).json()
   assert.ok(stats.lookups >= 3)
   assert.ok(stats.recent.some((x) => x.id === 'tt2' && x.type === 'movie'))
+})
+
+test('one malformed stream url does not wipe the other results', async () => {
+  const r = await fetch(`${at(withKey)}/stream/series/tt-bad-url.json`)
+  assert.deepEqual(await titles(r), ['Odd', 'Fine'])
+})
+
+test('tells a rejected key apart from a rate-limited TorBox', async () => {
+  for (const [key, verdict] of [['WRONG', 'invalid'], ['RATE-LIMITED', 'unreachable']]) {
+    const server = await start({ TORBOX_KEY: key })
+    assert.equal((await (await fetch(`${at(server)}/health`)).json()).torbox, verdict)
+    server.close()
+  }
+})
+
+test('an invalid MAX_FILES falls back to 100', async () => {
+  const server = await start({ MAX_FILES: 'lots' })
+  assert.equal((await (await fetch(`${at(server)}/manifest.json`)).json()).name, 'Torrentio (max 100 files)')
+  server.close()
 })
 
 test.after(() => [torrentio, torbox, withKey, noKey].forEach((s) => s.close()))

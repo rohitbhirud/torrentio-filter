@@ -2,13 +2,23 @@
 // (TorBox zips torrents with more than 100 files, which Torrentio then can't play).
 
 const defaults = { maxFiles: 100, heuristics: true }
+const HASH = /^[0-9a-f]{40}$/i
+
+// Path segments of a stream's URL, or [] when it has none or it doesn't parse.
+function pathParts(stream) {
+  try {
+    return new URL(stream.url ?? '', 'http://x').pathname.split('/')
+  } catch {
+    return []
+  }
+}
 
 // A file index of N means the torrent has at least N + 1 files.
 export function fileIdxOf(stream) {
   if (Number.isInteger(stream.fileIdx)) return stream.fileIdx
   // Debrid streams: .../resolve/<provider>/<key>/<infoHash>/<x>/<fileIdx>/<filename>
-  const parts = new URL(stream.url ?? 'http://x/', 'http://x').pathname.split('/')
-  const h = parts.findIndex((p) => /^[0-9a-f]{40}$/i.test(p))
+  const parts = pathParts(stream)
+  const h = parts.findIndex((p) => HASH.test(p))
   if (h === -1) return null
   const idx = parts[h + 2]
   return /^\d+$/.test(idx ?? '') ? Number(idx) : null
@@ -16,23 +26,25 @@ export function fileIdxOf(stream) {
 
 const BATCH_WORD = /\b(batch|complete|collection|extras|all seasons|all episodes)\b/i
 // Episode ranges such as 001-574 or 01-900, but not season ranges (S07-15),
-// codec tags (x265-GROUP) or resolutions (1080p).
+// codec tags (x265-GROUP), resolutions (1080p) or years (1999-2023).
 const EPISODE_RANGE = /(?<![\w.])(\d{1,4})\s*[-~]\s*(\d{1,4})(?![\w.])/g
+const isYear = (n) => n >= 1900 && n <= 2099
 
 function looksLikeBatch(stream, opts = defaults) {
   const torrentName = String(stream.title ?? '').split('\n')[0]
   // Words like "Batch" also appear on small packs, so only trust them when no range is given.
   const ranges = [...torrentName.matchAll(EPISODE_RANGE)]
-    .map(([, a, b]) => Number(b) - Number(a) + 1)
+    .map(([, a, b]) => [Number(a), Number(b)])
+    .filter(([a, b]) => !(isYear(a) && isYear(b)))
+    .map(([a, b]) => b - a + 1)
     .filter((n) => n > 1)
   if (ranges.length) return ranges.some((n) => n > opts.maxFiles)
   return BATCH_WORD.test(torrentName)
 }
 
 export function hashOf(stream) {
-  if (/^[0-9a-f]{40}$/i.test(stream.infoHash ?? '')) return stream.infoHash.toLowerCase()
-  const parts = new URL(stream.url ?? 'http://x/', 'http://x').pathname.split('/')
-  return parts.find((p) => /^[0-9a-f]{40}$/i.test(p))?.toLowerCase() ?? null
+  if (HASH.test(stream.infoHash ?? '')) return stream.infoHash.toLowerCase()
+  return pathParts(stream).find((p) => HASH.test(p))?.toLowerCase() ?? null
 }
 
 // counts: Map of infoHash -> exact file count from TorBox. When it knows the answer it wins;
@@ -64,10 +76,12 @@ export function parseFileCounts(json) {
   return out
 }
 
-const DEBRID = /^(torbox|realdebrid|alldebrid|premiumize|debridlink|easydebrid|offcloud|putio)=/i
+// Torrentio config options that hold a debrid key.
+const DEBRID_SERVICES = 'torbox|realdebrid|alldebrid|premiumize|debridlink|easydebrid|offcloud|putio'
+const DEBRID = new RegExp(`^(${DEBRID_SERVICES})=`, 'i')
 
 export function redact(s) {
-  return s.replace(/(torbox|realdebrid|alldebrid|premiumize|debridlink|easydebrid|offcloud|putio)=[^|%/&]+/gi, '$1=***')
+  return s.replace(new RegExp(`(${DEBRID_SERVICES})=[^|%/&]+`, 'gi'), '$1=***')
 }
 
 // The Torrentio config to send upstream: the user's options, with any debrid key swapped for this one.
@@ -81,7 +95,8 @@ export async function checkTorboxKey(key, torbox = 'https://api.torbox.app') {
   if (!key) return 'not set'
   try {
     const r = await fetch(`${torbox}/v1/api/user/me`, { headers: { Authorization: `Bearer ${key}` }, signal: AbortSignal.timeout(8000) })
-    if (r.status === 401 || r.status === 403) return 'invalid'
+    if (r.status === 401 || r.status === 403) return 'invalid' // TorBox answers BAD_TOKEN with 403
+    if (!r.ok) return 'unreachable' // rate limited or down: says nothing about the key
     return (await r.json()).success ? 'ok' : 'invalid'
   } catch {
     return 'unreachable'
