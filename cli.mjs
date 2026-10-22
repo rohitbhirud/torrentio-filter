@@ -188,8 +188,9 @@ const commands = {
     }
     console.log()
     printStatus(h, p)
-    console.log(`\n  ${bold('Add it to Stremio:')} Add-ons → paste this in the search box → Install\n\n    ${purple(`${url(p)}/manifest.json`)}\n`)
-    console.log(dim(`  Status page: ${url(p)}   ·   torrentio-filter help for more\n`))
+    console.log(`\n  ${bold('Add it to Stremio:')} click ${bold('Install in Stremio')} on the status page (${url(p)}).`)
+    console.log(`  Or in Stremio, go to Add-ons and paste this into the search box: ${purple(`${url(p)}/manifest.json`)}\n`)
+    console.log(dim('  torrentio-filter help for more\n'))
     if (!process.argv.includes('--no-open')) spawn('open', [url(p)], { stdio: 'ignore', detached: true }).unref()
   },
 

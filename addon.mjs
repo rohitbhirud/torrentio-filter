@@ -139,7 +139,9 @@ h1{margin:0;font-size:28px;letter-spacing:-.02em}h2{margin:0 0 12px;font-size:18
 .urlrow{display:flex;gap:8px;align-items:stretch;flex-wrap:wrap}
 .urlrow code{flex:1 1 280px;min-width:0;padding:10px 12px;border-radius:10px;background:var(--bg);border:1px solid var(--line);word-break:break-all;font-size:14px}
 button{border:0;border-radius:10px;padding:10px 18px;font:600 15px system-ui;background:var(--accent);color:var(--accent-ink);cursor:pointer}
-button:active{transform:scale(.97)}ol{margin:16px 0 0;padding-left:22px}li{margin:4px 0}.hint{color:var(--muted);font-size:14px;margin:10px 0 0}
+button:active,.install:active{transform:scale(.97)}
+.install{display:block;text-align:center;text-decoration:none;border-radius:12px;padding:14px 18px;font:700 17px system-ui;background:var(--accent);color:var(--accent-ink);margin-bottom:12px}
+.urlrow button{background:var(--bg);color:var(--text);border:1px solid var(--line)}ol{margin:16px 0 0;padding-left:22px}li{margin:4px 0}.hint{color:var(--muted);font-size:14px;margin:10px 0 0}
 details summary{cursor:pointer;font-weight:600}label{display:block;font-weight:600;font-size:14px;margin:14px 0 4px}
 input{width:100%;padding:10px 12px;border-radius:10px;border:1px solid var(--line);background:var(--bg);color:var(--text);font:15px system-ui}
 .nums{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:16px}
@@ -156,15 +158,17 @@ footer code{font-size:13px}
 <div class=pills><span id=s-server class="pill ok">Filter running</span><span id=s-torrentio class=pill>Checking Torrentio…</span><span id=s-torbox class=pill>Checking TorBox…</span></div>
 
 <section class=card><h2>Add it to Stremio</h2>
-<div class=urlrow><code id=out>&nbsp;</code><button id=copy>Copy link</button></div>
-<ol><li>Open Stremio and go to <b>Add-ons</b>.</li>
-<li>Paste the link into the search box at the top, then press <b>Install</b>.</li>
+<a id=install class=install href="#">Install in Stremio</a>
+<ol><li>Click <b>Install in Stremio</b>, then <b>Install</b> in the window Stremio shows.</li>
 <li>Uninstall the original Torrentio, so results don't show up twice.</li></ol>
+<p class=hint>Stremio didn't open? Copy the link, then in Stremio go to Add-ons and paste it into the search box.</p>
+<div class=urlrow><code id=out>&nbsp;</code><button id=copy>Copy link</button></div>
 <p id=hint class=hint></p>
-<details><summary>Settings</summary>
-<label for=link>Torrentio install link, to keep your sort and quality settings</label>
+<details><summary>Optional: your own Torrentio settings</summary>
+<p class=hint>Not needed. Torrentio is built in and uses its default settings. Only if you changed sorting or
+quality filters on Torrentio's configure page, paste its install link here, then click Install again.</p>
+<label for=link>Torrentio install link</label>
 <input id=link placeholder="stremio://torrentio.strem.fun/.../manifest.json">
-<p class=hint>After changing it, copy the link again and reinstall in Stremio.</p>
 </details></section>
 
 <section id=stats class=card hidden><h2>What it's been up to</h2>
@@ -186,7 +190,10 @@ function update() {
   let parts = []
   // The key in a pasted link is dropped: the server adds the one from setup.
   try { parts = m && m[1] ? decodeURIComponent(m[1]).split('|').filter((p) => p && !DEBRID.test(p)) : [] } catch {}
-  $('out').textContent = location.origin + (parts.length ? '/' + encodeURIComponent(parts.join('|')) : '') + '/manifest.json'
+  const url = location.origin + (parts.length ? '/' + encodeURIComponent(parts.join('|')) : '') + '/manifest.json'
+  $('out').textContent = url
+  // stremio://host/... links always become https, so use the form that opens the install window with this exact URL.
+  $('install').href = 'stremio:///addons?addon=' + encodeURIComponent(url)
 }
 $('link').oninput = update
 update()

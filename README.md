@@ -15,8 +15,11 @@ You need Node 18 or newer (`node -v`; if missing: `brew install node`) and a Tor
 `setup` asks for the TorBox key (typing is hidden), checks it with TorBox, starts the filter,
 sets it to start at every login, and opens its status page.
 
-Then in Stremio: **Add-ons** → paste `http://127.0.0.1:7171/manifest.json` into the search box →
-**Install**. Uninstall the original Torrentio so results don't show up twice.
+Then click **Install in Stremio** on that page, and **Install** in the window Stremio shows.
+(Or in Stremio: **Add-ons** → paste `http://127.0.0.1:7171/manifest.json` into the search box.)
+Uninstall the original Torrentio so results don't show up twice.
+
+There's no Torrentio link to enter: Torrentio is built in, with its default settings.
 
 ## Everyday commands
     torrentio-filter status      is it running, does Torrentio answer, does the key work
@@ -29,8 +32,9 @@ Then in Stremio: **Add-ons** → paste `http://127.0.0.1:7171/manifest.json` int
 Update to new code: `git pull && torrentio-filter setup` (it keeps your key and port).
 
 The status page shows whether Torrentio and TorBox are answering, what you've looked up recently,
-and how many giant batches it has hidden. Under **Settings** you can paste a Torrentio install link
-to keep its sort and quality options. Copy the link again afterwards and reinstall in Stremio.
+and how many giant batches it has hidden. Optional: if you changed sorting or quality filters on
+Torrentio's configure page, paste its install link under **Optional: your own Torrentio settings**,
+then click Install again.
 
 ## Where things live
 - Code it runs: `~/Library/Application Support/TorrentioFilter/` (copied there by `setup`, so the
