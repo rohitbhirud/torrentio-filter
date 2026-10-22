@@ -7,6 +7,5 @@
   "observability": { "enabled": false },
   "vars": { "MAX_FILES": "100", "HEURISTICS": "1" }
   // Secrets (set with `npx wrangler secret put <NAME>`, never committed):
-  //   TORBOX_KEY            the shared TorBox API key
-  //   ACCESS_CODE_<NAME>    one access code per person, e.g. ACCESS_CODE_ROHIT, ACCESS_CODE_FRIEND
+  //   TORBOX_KEY            the shared TorBox API key, used by install URLs without a key of their own
 }

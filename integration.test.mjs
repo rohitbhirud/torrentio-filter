@@ -43,14 +43,8 @@ const torrentio = await listen((req, res) => {
   res.end(JSON.stringify({ streams: [stream(H_BIG, 'Big pack'), stream(H_PACK, 'Naruto [Complete] [Extras]'), stream(H_NEW, 'Show [Complete]')] }))
 })
 
-const env = {
-  UPSTREAM: at(torrentio),
-  TORBOX_API: at(torbox),
-  TORBOX_KEY: SHARED,
-  ACCESS_CODE_ROHIT: 'code-rohit',
-  ACCESS_CODE_FRIEND: 'code-friend',
-}
-const get = (path, init) => worker.fetch(new Request(`https://filter.example${path}`, init), env)
+const env = { UPSTREAM: at(torrentio), TORBOX_API: at(torbox), TORBOX_KEY: SHARED }
+const get = (path, init, e = env) => worker.fetch(new Request(`https://filter.example${path}`, init), e)
 const titles = async (r) => (await r.json()).streams.map((s) => s.title.split('\n')[0])
 
 test('uses TorBox file counts and falls back to the name for uncached torrents', async () => {
@@ -61,35 +55,34 @@ test('uses TorBox file counts and falls back to the name for uncached torrents',
   assert.deepEqual(seen.query.getAll('hash').sort(), [H_BIG, H_PACK, H_NEW].sort())
 })
 
-test('works without a TorBox key (name rules only)', async () => {
-  const r = await get('/sort=seeders/stream/series/tt1:1:22.json')
+test('works without any TorBox key (name rules only)', async () => {
+  const r = await get('/sort=seeders/stream/series/tt1:1:22.json', undefined, { ...env, TORBOX_KEY: undefined })
   assert.deepEqual(await titles(r), ['Big pack'])
 })
 
-test('an access code uses the shared key and never returns it', async () => {
-  const r = await get('/sort=seeders%7Caccess=code-friend/stream/series/tt1:1:22.json')
-  const text = await r.text()
-  assert.equal(seen.auth, `Bearer ${SHARED}`)
-  assert.ok(!text.includes(SHARED))
-  const [s] = JSON.parse(text).streams
-  assert.equal(s.url, `https://filter.example/sort=seeders%7Caccess=code-friend/resolve/torbox/${H_PACK}/null/3/ep.mkv`)
+test('a config without a key uses the shared key and never returns it', async () => {
+  for (const [path, base] of [
+    ['/sort=seeders/stream/series/tt1:1:22.json', 'https://filter.example/sort=seeders'],
+    ['/stream/series/tt1:1:22.json', 'https://filter.example'],
+  ]) {
+    seen.auth = null
+    const text = await (await get(path)).text()
+    assert.equal(seen.auth, `Bearer ${SHARED}`)
+    assert.ok(!text.includes(SHARED))
+    const [s] = JSON.parse(text).streams
+    assert.equal(s.url, `${base}/resolve/torbox/${H_PACK}/null/3/ep.mkv`)
+  }
 })
 
 test('resolve follows the hops that carry the key and redirects to the CDN link only', async () => {
-  const r = await get(`/access=code-rohit/resolve/torbox/${H_PACK}/null/3/ep.mkv`, { redirect: 'manual' })
+  const r = await get(`/resolve/torbox/${H_PACK}/null/3/ep.mkv`, { redirect: 'manual' })
   assert.equal(r.status, 302)
   assert.equal(r.headers.get('Location'), `${at(cdn)}/dl/abc.mkv?sig=xyz`)
   assert.equal(seen.resolvedWith, `/resolve/torbox/${SHARED}/${H_PACK}/null/3/ep.mkv`)
 })
 
-test('an unknown access code is refused', async () => {
-  assert.equal((await get('/access=nope/manifest.json')).status, 403)
-  assert.equal((await get(`/access=nope/resolve/torbox/${H_PACK}/null/3/ep.mkv`)).status, 403)
-  assert.equal((await get('/access=code-friend/manifest.json')).status, 200)
-})
-
-test('resolve is not open without an access code', async () => {
-  assert.equal((await get(`/sort=seeders/resolve/torbox/${H_PACK}/null/3/ep.mkv`)).status, 404)
+test('resolve is not open to installs that bring their own key', async () => {
+  assert.equal((await get(`/torbox=OWNKEY/resolve/torbox/${H_PACK}/null/3/ep.mkv`)).status, 404)
 })
 
 test.after(() => { torrentio.close(); torbox.close(); cdn.close() })

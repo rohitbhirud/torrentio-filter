@@ -73,17 +73,15 @@ export function parseFileCounts(json) {
 const DEBRID = /^(torbox|realdebrid|alldebrid|premiumize|debridlink|easydebrid|offcloud|putio)=/i
 
 export function redact(s) {
-  return s.replace(/(torbox|realdebrid|alldebrid|premiumize|debridlink|easydebrid|offcloud|putio|access)=[^|%/&]+/gi, '$1=***')
+  return s.replace(/(torbox|realdebrid|alldebrid|premiumize|debridlink|easydebrid|offcloud|putio)=[^|%/&]+/gi, '$1=***')
 }
 
-// Shared mode: a config such as "sort=seeders|access=<code>" has no debrid key of its own.
-// Returns the access code (or null), and the config to send upstream with the shared key swapped in.
-export function accessCodeOf(config) {
-  if (!config) return null
-  return /(?:^|\|)access=([^|]+)/i.exec(decodeURIComponent(config))?.[1] ?? null
+// A config with no debrid key of its own uses the shared key.
+export function hasOwnKey(config) {
+  return Boolean(config) && decodeURIComponent(config).split('|').some((p) => DEBRID.test(p))
 }
 
 export function withSharedKey(config, key) {
-  const parts = decodeURIComponent(config).split('|').filter((p) => p && !/^access=/i.test(p) && !DEBRID.test(p))
+  const parts = config ? decodeURIComponent(config).split('|').filter((p) => p && !DEBRID.test(p)) : []
   return encodeURIComponent([...parts, `torbox=${key}`].join('|'))
 }

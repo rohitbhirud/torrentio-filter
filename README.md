@@ -4,10 +4,11 @@ Stremio addon that sits in front of Torrentio and hides torrents with more than 
 (TorBox zips those, so Torrentio can't play them). Runs on Cloudflare Workers (free plan).
 
 ## Two ways to use it
-- **Shared key:** the Worker holds one TorBox API key as an encrypted Cloudflare secret. Each person
-  gets their own access code and puts that in their install URL instead of the key. The key never
-  reaches Stremio: play links go through the Worker, which follows Torrentio's and TorBox's
-  redirects itself and hands the player only the final CDN link.
+- **Shared key (default):** the Worker holds one TorBox API key as an encrypted Cloudflare secret
+  and uses it for any install URL without a key of its own. The key never reaches Stremio: play
+  links go through the Worker, which follows Torrentio's and TorBox's redirects itself and hands the
+  player only the final CDN link. There is no password, so anyone who has the Worker's address can
+  use the shared key.
 - **Own key:** anyone can paste their own TorBox key on the landing page. That key lives only in
   their install URL, like plain Torrentio. The Worker never stores it.
 
@@ -23,22 +24,14 @@ from the dashboard, and are only visible to the running Worker.
 Then check `https://torrentio-filter.<you>.workers.dev/health`. `"torrentio": 200` means Torrentio
 answers Cloudflare's servers. A 403 means Torrentio blocks them, and Workers won't work for this.
 
-## Access codes
-One secret per person, so you can revoke one without changing the others:
-
-    npm run new-code                            # prints a random code
-    npx wrangler secret put ACCESS_CODE_ROHIT   # paste your code
-    npx wrangler secret put ACCESS_CODE_FRIEND  # paste a different code; send it to your friend privately
-
-Revoke: `npx wrangler secret delete ACCESS_CODE_FRIEND`. Their addon stops working at once.
-If the TorBox key itself leaks, regenerate it in TorBox and run `wrangler secret put TORBOX_KEY` again.
+If the TorBox key leaks, regenerate it in TorBox and run `npx wrangler secret put TORBOX_KEY` again.
 Nobody needs to reinstall.
 
 ## Install in Stremio
 1. Open `https://torrentio-filter.<you>.workers.dev/`.
 2. Optional: paste a Torrentio install link (torrentio.strem.fun/configure, "Copy Link") to keep its
    sort and quality settings. Configure it without a debrid key; any key in it is replaced.
-3. Enter your access code (or your own TorBox key).
+3. Leave the key field empty to use the shared key, or enter your own TorBox key.
 4. Click "Install in Stremio", or paste the URL it shows into Stremio, under Addons.
 5. Uninstall the original Torrentio so results are not listed twice.
 

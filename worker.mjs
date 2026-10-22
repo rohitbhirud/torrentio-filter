@@ -1,13 +1,12 @@
 // Stremio wrapper addon on Cloudflare Workers: forwards stream requests to Torrentio and drops
 // results that come from huge torrents. Two ways to install it:
 //
+//   Shared key:  /manifest.json, or /<torrentio config without a debrid key>/manifest.json
+//                The Worker adds the TORBOX_KEY secret. The key never leaves the Worker:
+//                play links are rewritten to go through /resolve below.
 //   Own key:     /<torrentio config with torbox=KEY>/manifest.json
 //                The key lives only in that install URL, never on the server.
-//   Shared key:  /<torrentio config with access=CODE>/manifest.json
-//                The Worker swaps in the TORBOX_KEY secret. Codes are ACCESS_CODE_<NAME> secrets,
-//                one per person, so one can be revoked without touching the others. The key never
-//                leaves the Worker: play links are rewritten to go through /resolve below.
-import { tooBig, hashOf, torboxKeyOf, parseFileCounts, redact, accessCodeOf, withSharedKey } from './filter.mjs'
+import { tooBig, hashOf, torboxKeyOf, parseFileCounts, redact, hasOwnKey, withSharedKey } from './filter.mjs'
 
 const TIMEOUT_MS = 20000
 const COUNT_TTL_MS = 24 * 3600 * 1000
@@ -55,24 +54,9 @@ async function fileCounts(hashes, key, opts) {
   return new Map(hashes.filter(fresh).map((h) => [h, countCache.get(h).count]))
 }
 
-// Constant-time match of an access code against the ACCESS_CODE_<NAME> secrets. Returns the name.
-async function personFor(code, env) {
-  if (!code || !env.TORBOX_KEY) return null
-  const digest = async (s) => new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(s)))
-  const want = await digest(code)
-  let found = null
-  for (const [name, value] of Object.entries(env)) {
-    if (!name.startsWith('ACCESS_CODE_') || typeof value !== 'string' || !value) continue
-    const got = await digest(value)
-    let diff = 0
-    for (let i = 0; i < want.length; i++) diff |= want[i] ^ got[i]
-    if (diff === 0) found = name.slice('ACCESS_CODE_'.length).toLowerCase()
-  }
-  return found
-}
-
 async function handleStream(ctx, type, id) {
   const { opts, upstreamConfig, sharedKey, config, origin, who } = ctx
+  const base = `${origin}${config ? `/${config}` : ''}`
   const r = await fetch(`${opts.upstream}${upstreamConfig ? `/${upstreamConfig}` : ''}/stream/${type}/${id}`, {
     signal: AbortSignal.timeout(TIMEOUT_MS),
   })
@@ -86,7 +70,7 @@ async function handleStream(ctx, type, id) {
     // Point play links at this Worker instead of Torrentio, so the shared key is not in them.
     const prefix = `${opts.upstream}/resolve/torbox/${sharedKey}/`
     kept = kept
-      .map((s) => (s.url?.startsWith(prefix) ? { ...s, url: `${origin}/${config}/resolve/torbox/${s.url.slice(prefix.length)}` } : s))
+      .map((s) => (s.url?.startsWith(prefix) ? { ...s, url: `${base}/resolve/torbox/${s.url.slice(prefix.length)}` } : s))
       .filter((s) => !JSON.stringify(s).includes(sharedKey))
   }
   console.log(`${who}: ${type}/${decodeURIComponent(id)}: ${streams.length} from upstream, exact file count for ${counts.size}, ${streams.length - kept.length} dropped, ${kept.length} kept`)
@@ -137,10 +121,8 @@ export default {
       const [, config, rest] = m
 
       const ctx = { opts, config, origin, upstreamConfig: config, sharedKey: null, who: 'own key' }
-      const code = accessCodeOf(config)
-      if (code) {
-        ctx.who = await personFor(code, env)
-        if (!ctx.who) return send(403, { error: 'unknown access code' })
+      if (env.TORBOX_KEY && !hasOwnKey(config)) {
+        ctx.who = 'shared key'
         ctx.sharedKey = env.TORBOX_KEY
         ctx.upstreamConfig = withSharedKey(config, env.TORBOX_KEY)
       }
@@ -164,39 +146,30 @@ const landing = String.raw`<!doctype html><meta charset=utf-8><meta name=viewpor
 <title>Torrentio filter</title>
 <style>body{font:16px system-ui;max-width:640px;margin:40px auto;padding:0 16px;line-height:1.5}
 input{width:100%;padding:8px;box-sizing:border-box;margin-bottom:12px}label{font-weight:600}
-code{word-break:break-all}.err{color:#b00}</style>
+code{word-break:break-all}</style>
 <h1>Torrentio filter</h1>
-<p>Hides Torrentio results from torrents with too many files. Fill in one of the two keys.
-This page runs only in your browser; nothing you type is sent anywhere.</p>
-<label for=link>Torrentio install link (optional, keeps your sort and quality settings)</label>
+<p>Hides Torrentio results from torrents with too many files. Both fields are optional:
+leave them empty to use the shared TorBox key. This page runs only in your browser; nothing you type is sent anywhere.</p>
+<label for=link>Torrentio install link (keeps your sort and quality settings)</label>
 <input id=link placeholder="stremio://torrentio.strem.fun/.../manifest.json">
-<label for=code>Access code (uses the shared TorBox key)</label>
-<input id=code autocomplete=off>
-<label for=key>or your own TorBox API key</label>
+<label for=key>Your own TorBox API key (instead of the shared one)</label>
 <input id=key type=password autocomplete=off>
-<p id=msg>Paste this into Stremio, under Addons:</p>
+<p>Paste this into Stremio, under Addons:</p>
 <p><code id=out>&nbsp;</code></p>
-<p><a id=open href="#" hidden>Install in Stremio</a></p>
+<p><a id=open href="#">Install in Stremio</a></p>
 <script>
 const $ = (id) => document.getElementById(id)
-const DEBRID = /^(access|torbox|realdebrid|alldebrid|premiumize|debridlink|easydebrid|offcloud|putio)=/i
+const DEBRID = /^(torbox|realdebrid|alldebrid|premiumize|debridlink|easydebrid|offcloud|putio)=/i
 function update() {
-  const link = $('link').value.trim(), code = $('code').value.trim(), key = $('key').value.trim()
+  const link = $('link').value.trim(), key = $('key').value.trim()
   const m = /torrentio\.strem\.fun\/(?:(.+)\/)?manifest\.json/.exec(link)
-  let parts = m && m[1] ? decodeURIComponent(m[1]).split('|') : []
-  if (code && key) return show('Fill in only one: the access code or your own key.')
-  if (code) parts = parts.filter((p) => !DEBRID.test(p)).concat('access=' + code)
-  else if (key) parts = parts.filter((p) => !DEBRID.test(p)).concat('torbox=' + key)
-  else if (!m) return show('')
+  // Any key in the pasted link is dropped, so leaving the key field empty always means the shared key.
+  let parts = m && m[1] ? decodeURIComponent(m[1]).split('|').filter((p) => p && !DEBRID.test(p)) : []
+  if (key) parts = parts.concat('torbox=' + key)
   const path = (parts.length ? '/' + encodeURIComponent(parts.join('|')) : '') + '/manifest.json'
-  show('', location.origin + path, 'stremio://' + location.host + path)
+  $('out').textContent = location.origin + path
+  $('open').href = 'stremio://' + location.host + path
 }
-function show(err, url, deep) {
-  $('msg').textContent = err || 'Paste this into Stremio, under Addons:'
-  $('msg').className = err ? 'err' : ''
-  $('out').textContent = url || ' '
-  $('open').hidden = !deep
-  if (deep) $('open').href = deep
-}
-for (const id of ['link', 'code', 'key']) $(id).oninput = update
+for (const id of ['link', 'key']) $(id).oninput = update
+update()
 </script>`

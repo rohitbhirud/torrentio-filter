@@ -1,7 +1,7 @@
 # Hosting the Torrentio filter on Cloudflare Workers
 
 > Status (2026-10-22): ported. `worker.mjs` + `filter.mjs` replace `server.mjs`; deploy steps are in README.md.
-> Decision: share one TorBox key, held as a Worker secret, with a per-person access code (see Risks, item 3).
+> Decision: share one TorBox key, held as a Worker secret, with no password: install URLs without a key use it (see Risks, item 3).
 
 Goal: run the filter 24/7 on a free, always-on host with HTTPS, so a friend can use it
 without installing Node, and without my laptop being switched on.
@@ -23,7 +23,7 @@ without installing Node, and without my laptop being switched on.
    API key without written permission, while the help center article (April 2026) says sharing is
    fine. Safest: the friend uses their own TorBox key, or ask TorBox support for written permission.
    Decision: share one key anyway, accepting the risk that TorBox revokes it. The key is a Worker
-   secret (not in the code or repo), each person has a revocable access code, and the key never reaches
+   secret (not in the code or repo), there are no access codes (kept simple on purpose), and the key never reaches
    Stremio (the Worker follows the resolve redirects itself).
 
 ## Step 1: 10-minute test (is Torrentio reachable from Workers?)
