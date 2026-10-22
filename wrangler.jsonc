@@ -1,0 +1,12 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "torrentio-filter",
+  "main": "worker.mjs",
+  "compatibility_date": "2026-10-01",
+  // Request URLs can hold a user's own debrid key, so keep request logging off.
+  "observability": { "enabled": false },
+  "vars": { "MAX_FILES": "100", "HEURISTICS": "1" }
+  // Secrets (set with `npx wrangler secret put <NAME>`, never committed):
+  //   TORBOX_KEY            the shared TorBox API key
+  //   ACCESS_CODE_<NAME>    one access code per person, e.g. ACCESS_CODE_ROHIT, ACCESS_CODE_FRIEND
+}

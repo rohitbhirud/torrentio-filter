@@ -1,0 +1,14 @@
+{
+  "name": "torrentio-filter",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test",
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "new-code": "node -e \"console.log(require('crypto').randomBytes(18).toString('base64url'))\""
+  },
+  "devDependencies": {
+    "wrangler": "^4.151.3"
+  }
+}
