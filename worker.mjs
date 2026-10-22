@@ -97,8 +97,10 @@ async function handleResolve(ctx, rest, request) {
 }
 
 async function health(opts, env) {
-  const r = await fetch(`${opts.upstream}/manifest.json`, { signal: AbortSignal.timeout(TIMEOUT_MS) }).catch((e) => ({ status: String(e.message) }))
-  return send(200, { torrentio: r.status, sharedKey: Boolean(env.TORBOX_KEY) })
+  // A 403 titled "Attention Required! | Cloudflare" means Torrentio's firewall blocks this host's IPs.
+  const r = await fetch(`${opts.upstream}/manifest.json`, { signal: AbortSignal.timeout(TIMEOUT_MS) }).catch((e) => ({ status: String(e.message), text: async () => '' }))
+  const page = r.status === 200 ? undefined : /<title>([^<]*)/i.exec(await r.text())?.[1]
+  return send(200, { torrentio: r.status, page, sharedKey: Boolean(env.TORBOX_KEY) })
 }
 
 function send(status, body, type = 'application/json') {
