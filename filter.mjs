@@ -1,6 +1,6 @@
 // Filtering rules: decide which Torrentio results come from torrents that are too big
 // (TorBox zips torrents with more than 100 files, which Torrentio then can't play).
-// No platform APIs here, so the same code runs in the Worker and in `node --test`.
+// Only web-standard APIs here, so the same code runs in the Worker, in Node and in `node --test`.
 
 export const defaults = { maxFiles: 100, heuristics: true }
 
@@ -84,4 +84,16 @@ export function hasOwnKey(config) {
 export function withSharedKey(config, key) {
   const parts = config ? decodeURIComponent(config).split('|').filter((p) => p && !DEBRID.test(p)) : []
   return encodeURIComponent([...parts, `torbox=${key}`].join('|'))
+}
+
+// Is the shared key accepted by TorBox? 'ok', 'invalid', 'unreachable' or 'not set'.
+export async function checkTorboxKey(key, torbox = 'https://api.torbox.app') {
+  if (!key) return 'not set'
+  try {
+    const r = await fetch(`${torbox}/v1/api/user/me`, { headers: { Authorization: `Bearer ${key}` }, signal: AbortSignal.timeout(8000) })
+    if (r.status === 401 || r.status === 403) return 'invalid'
+    return (await r.json()).success ? 'ok' : 'invalid'
+  } catch {
+    return 'unreachable'
+  }
 }

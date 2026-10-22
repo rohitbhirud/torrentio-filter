@@ -1,6 +1,7 @@
 # Hosting the Torrentio filter on Cloudflare Workers
 
-> Status (2026-10-22): ported. `worker.mjs` + `filter.mjs` replace `server.mjs`; deploy steps are in README.md.
+> Status (2026-10-22): blocked. Torrentio's firewall answers Workers with 403 "Attention Required! | Cloudflare".
+> The filter now runs locally on each Mac instead (README.md). Earlier status: ported. `worker.mjs` + `filter.mjs` replace `server.mjs`; deploy steps are in README.md.
 > Decision: share one TorBox key, held as a Worker secret, with no password: install URLs without a key use it (see Risks, item 3).
 
 Goal: run the filter 24/7 on a free, always-on host with HTTPS, so a friend can use it

@@ -1,39 +1,52 @@
-# Torrentio filter
+# 🧲 Torrentio Filter
 
-Stremio addon that sits in front of Torrentio and hides torrents with more than 100 files
-(TorBox zips those, so Torrentio can't play them). Runs on Cloudflare Workers (free plan).
+A Stremio add-on that sits in front of Torrentio and hides torrents with more than 100 files.
+TorBox zips those giant batches, so Torrentio can't play them and they only clutter the list.
+It runs quietly on your Mac and starts by itself when you log in.
 
-## Two ways to use it
-- **Shared key (default):** the Worker holds one TorBox API key as an encrypted Cloudflare secret
-  and uses it for any install URL without a key of its own. The key never reaches Stremio: play
-  links go through the Worker, which follows Torrentio's and TorBox's redirects itself and hands the
-  player only the final CDN link. There is no password, so anyone who has the Worker's address can
-  use the shared key.
-- **Own key:** anyone can paste their own TorBox key on the landing page. That key lives only in
-  their install URL, like plain Torrentio. The Worker never stores it.
+## Install (2 minutes)
+You need Node 18 or newer (`node -v`; if missing: `brew install node`) and a TorBox API key.
 
-The key is never in the code or the repo. Secrets are encrypted by Cloudflare, can't be read back
-from the dashboard, and are only visible to the running Worker.
+    git clone git@github.com:rohitbhirud/torrentio-filter.git
+    cd torrentio-filter
+    npm install -g .
+    torrentio-filter setup
 
-## Deploy (once)
-    npm install
-    npx wrangler login                          # opens the browser, sign in to Cloudflare
-    npm run deploy                              # prints https://torrentio-filter.<you>.workers.dev
-    npx wrangler secret put TORBOX_KEY          # paste the TorBox API key when asked
+`setup` asks for the TorBox key (typing is hidden), checks it with TorBox, starts the filter,
+sets it to start at every login, and opens its status page.
 
-Then check `https://torrentio-filter.<you>.workers.dev/health`. `"torrentio": 200` means Torrentio
-answers Cloudflare's servers. A 403 means Torrentio blocks them, and Workers won't work for this.
+Then in Stremio: **Add-ons** → paste `http://127.0.0.1:7171/manifest.json` into the search box →
+**Install**. Uninstall the original Torrentio so results don't show up twice.
 
-If the TorBox key leaks, regenerate it in TorBox and run `npx wrangler secret put TORBOX_KEY` again.
-Nobody needs to reinstall.
+## Everyday commands
+    torrentio-filter status      is it running, does Torrentio answer, does the key work
+    torrentio-filter open        open the status page (http://127.0.0.1:7171)
+    torrentio-filter key         change the TorBox key (nothing to change in Stremio)
+    torrentio-filter logs        follow the log
+    torrentio-filter restart     restart it
+    torrentio-filter uninstall   remove it, including the saved key
 
-## Install in Stremio
-1. Open `https://torrentio-filter.<you>.workers.dev/`.
-2. Optional: paste a Torrentio install link (torrentio.strem.fun/configure, "Copy Link") to keep its
-   sort and quality settings. Configure it without a debrid key; any key in it is replaced.
-3. Leave the key field empty to use the shared key, or enter your own TorBox key.
-4. Click "Install in Stremio", or paste the URL it shows into Stremio, under Addons.
-5. Uninstall the original Torrentio so results are not listed twice.
+Update to new code: `git pull && torrentio-filter setup` (it keeps your key and port).
+
+The status page shows whether Torrentio and TorBox are answering, what you've looked up recently,
+and how many giant batches it has hidden. Under **Settings** you can paste a Torrentio install link
+to keep its sort and quality options. Copy the link again afterwards and reinstall in Stremio.
+
+## Where things live
+- Code it runs: `~/Library/Application Support/TorrentioFilter/` (copied there by `setup`, so the
+  clone can move or be deleted)
+- Key and port: `config.env` in that folder, readable only by your user
+- Login service: `~/Library/LaunchAgents/local.torrentio-filter.plist`
+- Log: `~/Library/Logs/TorrentioFilter.log`
+
+The service starts Node by its full path. If you remove that Node version later (nvm, Homebrew
+upgrade), run `torrentio-filter setup` again.
+
+The key never reaches Stremio. Play links point at the filter, which follows Torrentio's and
+TorBox's redirects itself and hands the player only the final video link. The filter listens on
+127.0.0.1 only, so other devices on your network can't use it.
+
+Port 7171 is taken? `torrentio-filter setup --port 7272`, then use that port in the Stremio link.
 
 ## How it filters
 1. With a TorBox key, it asks TorBox for the real file count of each cached torrent
@@ -43,10 +56,12 @@ Nobody needs to reinstall.
    - Episode ranges in the name wider than MAX_FILES (001-574), or words like Batch/Complete/Extras with no range.
    - HEURISTICS=0 turns off the name rules and keeps only the fileIdx rule.
 
-MAX_FILES and HEURISTICS are set under `vars` in `wrangler.jsonc`.
+MAX_FILES and HEURISTICS can be added to `config.env`, then `torrentio-filter restart`.
 
-## Local run and tests
-    npm test                                    # unit tests plus end to end against fake Torrentio and TorBox servers
-    npm run dev                                 # http://127.0.0.1:8787, reads secrets from .dev.vars (gitignored)
+## Development
+    npm test                     unit tests plus end to end against fake Torrentio, TorBox and CDN servers
+    node cli.mjs run             run in the foreground
 
-Request logging (Workers observability) is off on purpose: own-key install URLs contain the key.
+`worker.mjs` is a plain fetch handler: `server.mjs` runs it on Node, and `wrangler.jsonc` deploys
+it to Cloudflare Workers. Workers doesn't work for this today: Torrentio's firewall blocks
+Cloudflare's servers (`/health` shows `"torrentio": 403`). See CLOUDFLARE-WORKERS-PLAN.md.
