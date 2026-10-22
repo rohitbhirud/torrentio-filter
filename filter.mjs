@@ -1,8 +1,7 @@
 // Filtering rules: decide which Torrentio results come from torrents that are too big
 // (TorBox zips torrents with more than 100 files, which Torrentio then can't play).
-// Only web-standard APIs here, so the same code runs in the Worker, in Node and in `node --test`.
 
-export const defaults = { maxFiles: 100, heuristics: true }
+const defaults = { maxFiles: 100, heuristics: true }
 
 // A file index of N means the torrent has at least N + 1 files.
 export function fileIdxOf(stream) {
@@ -20,7 +19,7 @@ const BATCH_WORD = /\b(batch|complete|collection|extras|all seasons|all episodes
 // codec tags (x265-GROUP) or resolutions (1080p).
 const EPISODE_RANGE = /(?<![\w.])(\d{1,4})\s*[-~]\s*(\d{1,4})(?![\w.])/g
 
-export function looksLikeBatch(stream, opts = defaults) {
+function looksLikeBatch(stream, opts = defaults) {
   const torrentName = String(stream.title ?? '').split('\n')[0]
   // Words like "Batch" also appear on small packs, so only trust them when no range is given.
   const ranges = [...torrentName.matchAll(EPISODE_RANGE)]
@@ -48,11 +47,6 @@ export function tooBig(stream, counts = new Map(), opts = defaults) {
   return opts.heuristics && looksLikeBatch(stream, opts)
 }
 
-export function torboxKeyOf(config) {
-  if (!config) return null
-  return /(?:^|\|)torbox=([^|]+)/i.exec(decodeURIComponent(config))?.[1] ?? null
-}
-
 // Reads { data: { <hash>: { files: [...] } } } or { data: [{ hash, files: [...] }] }.
 const ARCHIVE = /\.(zip|rar|7z|tar|tgz)$/i
 
@@ -76,17 +70,13 @@ export function redact(s) {
   return s.replace(/(torbox|realdebrid|alldebrid|premiumize|debridlink|easydebrid|offcloud|putio)=[^|%/&]+/gi, '$1=***')
 }
 
-// A config with no debrid key of its own uses the shared key.
-export function hasOwnKey(config) {
-  return Boolean(config) && decodeURIComponent(config).split('|').some((p) => DEBRID.test(p))
-}
-
-export function withSharedKey(config, key) {
+// The Torrentio config to send upstream: the user's options, with any debrid key swapped for this one.
+export function withKey(config, key) {
   const parts = config ? decodeURIComponent(config).split('|').filter((p) => p && !DEBRID.test(p)) : []
   return encodeURIComponent([...parts, `torbox=${key}`].join('|'))
 }
 
-// Is the shared key accepted by TorBox? 'ok', 'invalid', 'unreachable' or 'not set'.
+// Does TorBox accept this key? 'ok', 'invalid', 'unreachable' or 'not set'.
 export async function checkTorboxKey(key, torbox = 'https://api.torbox.app') {
   if (!key) return 'not set'
   try {

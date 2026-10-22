@@ -19,7 +19,7 @@ const CONFIG = path.join(APP, 'config.env')
 const PLIST = path.join(HOME, 'Library', 'LaunchAgents', `${LABEL}.plist`)
 const LOG = path.join(HOME, 'Library', 'Logs', 'TorrentioFilter.log')
 const LEGACY = path.join(HOME, 'Library', 'LaunchAgents', 'com.user.torrentio-filter.plist') // older hand-made setup
-const FILES = ['server.mjs', 'worker.mjs', 'filter.mjs']
+const FILES = ['server.mjs', 'addon.mjs', 'filter.mjs']
 const DOMAIN = `gui/${process.getuid?.()}`
 
 const tty = process.stdout.isTTY
@@ -47,30 +47,37 @@ const running = () => launchctl('print', `${DOMAIN}/${LABEL}`) !== null
 const port = () => Number(readConfig(CONFIG).PORT ?? 7171)
 const url = (p = port()) => `http://127.0.0.1:${p}`
 
-function portFree(p) {
-  return new Promise((resolve) => {
-    const s = net.createServer().once('error', () => resolve(false)).once('listening', () => s.close(() => resolve(true)))
-    s.listen(p, '127.0.0.1')
-  })
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+
+// A service that was just stopped can hold the port for a moment, so retry for a few seconds.
+async function portFree(p) {
+  for (let i = 0; i < 10; i++) {
+    const free = await new Promise((resolve) => {
+      const s = net.createServer().once('error', () => resolve(false)).once('listening', () => s.close(() => resolve(true)))
+      s.listen(p, '127.0.0.1')
+    })
+    if (free) return true
+    await sleep(300)
+  }
+  return false
 }
 
 async function health(p = port(), waitMs = 0) {
   const until = Date.now() + waitMs
   do {
-    try { return await (await fetch(`${url(p)}/health`, { signal: AbortSignal.timeout(15000) })).json() } catch {}
-    await new Promise((r) => setTimeout(r, 300))
+    try { return await (await fetch(`${url(p)}/health`, { signal: AbortSignal.timeout(25000) })).json() } catch {} // server waits up to 20 s on Torrentio
+    await sleep(300)
   } while (Date.now() < until)
   return null
 }
 
 async function askKey(current) {
-  if (process.env.TORBOX_KEY) return process.env.TORBOX_KEY
+  if (process.env.TORBOX_KEY) return process.env.TORBOX_KEY // non-interactive, used as is
   if (current && (await ask(`Keep the TorBox key already set up? ${dim('(Y/n)')} `)).toLowerCase() !== 'n') return current
   console.log(dim('Find it at torbox.app → Settings → API Key. Typing is hidden.'))
   for (let tries = 0; tries < 3; tries++) {
     const key = await ask('TorBox API key: ', { hidden: true })
     if (!key) continue
-    if (process.argv.includes('--skip-check')) return key
     const verdict = await checkTorboxKey(key)
     if (verdict === 'ok') { ok('TorBox accepted the key'); return key }
     if (verdict === 'unreachable') { warn("Couldn't reach TorBox to check the key; using it anyway"); return key }
@@ -125,7 +132,7 @@ function printStatus(h, p) {
   const line = (good, text) => console.log(`  ${good ? green('●') : red('●')} ${text}`)
   line(Boolean(h), h ? `Running at ${url(p)}` : 'Not answering')
   if (!h) return
-  line(h.torrentio === 200, h.torrentio === 200 ? 'Torrentio reachable' : `Torrentio blocked (${h.torrentio})`)
+  line(h.torrentio === 200, h.torrentio === 200 ? 'Torrentio reachable' : `Torrentio not answering (${h.torrentio})`)
   line(h.torbox === 'ok', { ok: 'TorBox key works', invalid: 'TorBox key rejected (run: torrentio-filter key)', unreachable: 'TorBox not answering', 'not set': 'No TorBox key (run: torrentio-filter key)' }[h.torbox])
 }
 
@@ -142,12 +149,14 @@ const commands = {
 
     const flag = process.argv.indexOf('--port')
     const p = Number(flag > -1 ? process.argv[flag + 1] : current.PORT ?? 7171)
+    if (!Number.isInteger(p) || p < 1024 || p > 65535) fail('--port needs a number from 1024 to 65535')
     step('Stopping any running copy')
     stopService()
     if (!(await portFree(p))) fail(`Port ${p} is in use by another app. Pick another: torrentio-filter setup --port 7272`)
 
     step(`Installing to ${dim(APP)}`)
     fs.mkdirSync(APP, { recursive: true })
+    for (const f of fs.readdirSync(APP)) if (f.endsWith('.mjs')) fs.rmSync(path.join(APP, f)) // files from older versions
     for (const f of FILES) fs.copyFileSync(path.join(HERE, f), path.join(APP, f))
     writeConfig({ ...current, TORBOX_KEY: key, PORT: String(p) })
     writePlist()
@@ -174,7 +183,7 @@ const commands = {
     if (!fs.existsSync(CONFIG)) fail('Not installed. Run: torrentio-filter setup')
     const current = readConfig(CONFIG)
     writeConfig({ ...current, TORBOX_KEY: await askKey() })
-    launchctl('kickstart', '-k', `${DOMAIN}/${LABEL}`)
+    if (launchctl('kickstart', '-k', `${DOMAIN}/${LABEL}`) === null) fail('Key saved, but the service is not running. Run: torrentio-filter setup')
     ok('Key saved and the filter restarted. Nothing to change in Stremio.')
   },
 
@@ -198,13 +207,6 @@ const commands = {
     ok('Removed the service, its settings (including the key) and its log. Remove the add-on in Stremio too.')
   },
 
-  async run() {
-    const { createServer } = await import('./server.mjs')
-    const env = { ...process.env, ...readConfig(CONFIG) }
-    const p = Number(env.PORT ?? 7171)
-    createServer(env).listen(p, '127.0.0.1', () => console.log(`Running in the foreground at ${url(p)} (Ctrl+C to stop)`))
-  },
-
   help() {
     banner()
     console.log(`  ${bold('torrentio-filter setup')}      install, or update after pulling new code ${dim('(--port N, --no-open)')}
@@ -213,7 +215,6 @@ const commands = {
   ${bold('torrentio-filter key')}        change the TorBox API key
   ${bold('torrentio-filter logs')}       follow the log
   ${bold('torrentio-filter restart')}    restart the background service
-  ${bold('torrentio-filter run')}        run in the foreground instead
   ${bold('torrentio-filter uninstall')}  remove everything, including the saved key
 `)
   },

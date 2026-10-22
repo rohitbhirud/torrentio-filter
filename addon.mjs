@@ -1,24 +1,20 @@
-// Stremio wrapper addon: forwards stream requests to Torrentio and drops results that come from
-// huge torrents. Written as a fetch handler, so it runs both locally (server.mjs) and on Workers.
-// Two ways to install it:
+// Stremio add-on: forwards stream requests to Torrentio and drops results that come from huge
+// torrents. A plain fetch handler; server.mjs serves it on 127.0.0.1.
 //
-//   Shared key:  /manifest.json, or /<torrentio config without a debrid key>/manifest.json
-//                The server adds TORBOX_KEY. The key never reaches Stremio:
-//                play links are rewritten to go through /resolve below.
-//   Own key:     /<torrentio config with torbox=KEY>/manifest.json
-//                The key lives only in that install URL, never on the server.
-import { tooBig, hashOf, torboxKeyOf, parseFileCounts, redact, hasOwnKey, withSharedKey, checkTorboxKey } from './filter.mjs'
+// Install URL: /manifest.json, or /<torrentio config>/manifest.json to keep Torrentio's sort and
+// quality options. Any debrid key in the config is replaced by TORBOX_KEY from config.env.
+import { tooBig, hashOf, parseFileCounts, redact, withKey, checkTorboxKey } from './filter.mjs'
 
 const TIMEOUT_MS = 20000
 const COUNT_TTL_MS = 24 * 3600 * 1000
-const countCache = new Map() // hash -> { count, at }; per isolate, so a few repeat lookups are fine
-// What the status page shows. Only served when LOCAL=1, since it lists what was watched.
-const stats = { since: Date.now(), lookups: 0, found: 0, hidden: 0, recent: [] }
+const countCache = new Map() // hash -> { count, at }
+const stats = { since: Date.now(), lookups: 0, found: 0, hidden: 0, recent: [] } // for the status page
 
 function settings(env) {
   return {
     upstream: (env.UPSTREAM ?? 'https://torrentio.strem.fun').replace(/\/$/, ''),
     torbox: (env.TORBOX_API ?? 'https://api.torbox.app').replace(/\/$/, ''),
+    key: env.TORBOX_KEY || null,
     maxFiles: Number(env.MAX_FILES ?? 100),
     heuristics: env.HEURISTICS !== '0',
   }
@@ -26,7 +22,7 @@ function settings(env) {
 
 const manifest = (opts) => ({
   id: 'local.torrentio.filtered',
-  version: '0.3.0',
+  version: '0.4.0',
   name: `Torrentio (max ${opts.maxFiles} files)`,
   description: `Torrentio results, minus torrents with more than ${opts.maxFiles} files.`,
   catalogs: [],
@@ -35,16 +31,16 @@ const manifest = (opts) => ({
   behaviorHints: { configurable: false, configurationRequired: false },
 })
 
-async function fileCounts(hashes, key, opts) {
+async function fileCounts(hashes, opts) {
   const now = Date.now()
   const fresh = (h) => countCache.get(h) && now - countCache.get(h).at < COUNT_TTL_MS
-  const need = [...new Set(hashes)].filter((h) => h && !fresh(h))
+  const need = [...new Set(hashes)].filter((h) => !fresh(h))
   for (let i = 0; i < need.length; i += 40) {
     const params = new URLSearchParams({ format: 'object', list_files: 'true' })
     need.slice(i, i + 40).forEach((h) => params.append('hash', h))
     try {
       const r = await fetch(`${opts.torbox}/v1/api/torrents/checkcached?${params}`, {
-        headers: { Authorization: `Bearer ${key}` },
+        headers: { Authorization: `Bearer ${opts.key}` },
         signal: AbortSignal.timeout(8000),
       })
       if (!r.ok) throw new Error(`TorBox ${r.status}`)
@@ -57,62 +53,32 @@ async function fileCounts(hashes, key, opts) {
   return new Map(hashes.filter(fresh).map((h) => [h, countCache.get(h).count]))
 }
 
-async function handleStream(ctx, type, id) {
-  const { opts, upstreamConfig, sharedKey, config, origin, who } = ctx
-  const base = `${origin}${config ? `/${config}` : ''}`
-  const r = await fetch(`${opts.upstream}${upstreamConfig ? `/${upstreamConfig}` : ''}/stream/${type}/${id}`, {
+async function handleStream(opts, config, type, id) {
+  const upstreamConfig = opts.key ? withKey(config, opts.key) : config
+  const r = await fetch(`${opts.upstream}${upstreamConfig ? `/${upstreamConfig}` : ''}/stream/${type}/${id}.json`, {
     signal: AbortSignal.timeout(TIMEOUT_MS),
   })
   if (!r.ok) throw new Error(`upstream ${r.status}`)
   const body = await r.json()
   const streams = body.streams ?? []
-  const key = torboxKeyOf(upstreamConfig)
-  const counts = key ? await fileCounts(streams.map(hashOf).filter(Boolean), key, opts) : new Map()
-  let kept = streams.filter((s) => !tooBig(s, counts, opts))
-  if (sharedKey) {
-    // Point play links at this server instead of Torrentio, so the shared key is not in them.
-    const prefix = `${opts.upstream}/resolve/torbox/${sharedKey}/`
-    kept = kept
-      .map((s) => (s.url?.startsWith(prefix) ? { ...s, url: `${base}/resolve/torbox/${s.url.slice(prefix.length)}` } : s))
-      .filter((s) => !JSON.stringify(s).includes(sharedKey))
-  }
+  const counts = opts.key ? await fileCounts(streams.map(hashOf).filter(Boolean), opts) : new Map()
+  const kept = streams.filter((s) => !tooBig(s, counts, opts))
   const hidden = streams.length - kept.length
-  const name = decodeURIComponent(id).replace(/\.json$/, '')
+  const name = decodeURIComponent(id)
   stats.lookups++
   stats.found += streams.length
   stats.hidden += hidden
   stats.recent = [{ at: Date.now(), type, id: name, found: streams.length, hidden }, ...stats.recent].slice(0, 8)
-  console.log(`${who}: ${type}/${name}: ${streams.length} from upstream, exact file count for ${counts.size}, ${hidden} dropped, ${kept.length} kept`)
+  console.log(`${type}/${name}: ${streams.length} from upstream, exact file count for ${counts.size}, ${hidden} dropped, ${kept.length} kept`)
   return send(200, { ...body, streams: kept })
 }
 
-// Torrentio answers with a redirect to api.torbox.app/...requestdl?token=<key>, which redirects
-// again to the TorBox CDN. Follow the hops that carry the key here, and hand the player only the last one.
-async function handleResolve(ctx, rest, request) {
-  const { opts, sharedKey } = ctx
-  let location = `${opts.upstream}/resolve/torbox/${sharedKey}/${rest}`
-  for (let hop = 0; hop < 4 && location.includes(sharedKey); hop++) {
-    const r = await fetch(location, {
-      redirect: 'manual',
-      headers: { 'User-Agent': request.headers.get('User-Agent') ?? 'Stremio' },
-      signal: AbortSignal.timeout(TIMEOUT_MS),
-    })
-    const next = r.headers.get('Location')
-    if (r.status < 300 || r.status >= 400 || !next) return send(r.ok ? 502 : r.status, '')
-    location = new URL(next, location).href
-  }
-  if (location.includes(sharedKey)) return send(502, '')
-  return new Response(null, { status: 302, headers: { Location: location, 'Cache-Control': 'no-store' } })
-}
-
-async function health(opts, env) {
-  // A 403 titled "Attention Required! | Cloudflare" means Torrentio's firewall blocks this host's IPs.
-  const [r, torbox] = await Promise.all([
-    fetch(`${opts.upstream}/manifest.json`, { signal: AbortSignal.timeout(TIMEOUT_MS) }).catch((e) => ({ status: String(e.message), text: async () => '' })),
-    checkTorboxKey(env.TORBOX_KEY, opts.torbox),
+async function health(opts) {
+  const [torrentio, torbox] = await Promise.all([
+    fetch(`${opts.upstream}/manifest.json`, { signal: AbortSignal.timeout(TIMEOUT_MS) }).then((r) => r.status, (e) => String(e.message)),
+    checkTorboxKey(opts.key, opts.torbox),
   ])
-  const page = r.status === 200 ? undefined : /<title>([^<]*)/i.exec(await r.text())?.[1]
-  return send(200, { torrentio: r.status, page, torbox, sharedKey: Boolean(env.TORBOX_KEY), local: env.LOCAL === '1' })
+  return send(200, { torrentio, torbox })
 }
 
 function send(status, body, type = 'application/json') {
@@ -125,29 +91,15 @@ function send(status, body, type = 'application/json') {
 export default {
   async fetch(request, env) {
     const opts = settings(env)
-    const { pathname, origin } = new URL(request.url)
+    const { pathname } = new URL(request.url)
     try {
       if (request.method === 'OPTIONS') return send(204, '')
       if (pathname === '/') return send(200, landing, 'text/html; charset=utf-8')
-      if (pathname === '/health') return await health(opts, env)
-      if (pathname === '/stats') return env.LOCAL === '1' ? send(200, stats) : send(404, { error: 'not found' })
-      const m = /^\/(?:([^/]+)\/)?(manifest\.json|stream\/.+|resolve\/torbox\/.+)$/.exec(pathname)
-      if (!m) return send(404, { error: 'not found' })
-      const [, config, rest] = m
-
-      const ctx = { opts, config, origin, upstreamConfig: config, sharedKey: null, who: 'own key' }
-      if (env.TORBOX_KEY && !hasOwnKey(config)) {
-        ctx.who = 'shared key'
-        ctx.sharedKey = env.TORBOX_KEY
-        ctx.upstreamConfig = withSharedKey(config, env.TORBOX_KEY)
-      }
-
-      if (rest === 'manifest.json') return send(200, manifest(opts))
-      if (rest.startsWith('resolve/')) {
-        return ctx.sharedKey ? await handleResolve(ctx, rest.slice('resolve/torbox/'.length), request) : send(404, { error: 'not found' })
-      }
-      const s = /^stream\/([^/]+)\/([^/]+?)(?:\.json)?$/.exec(rest)
-      if (s) return await handleStream(ctx, s[1], `${s[2]}.json`)
+      if (pathname === '/health') return await health(opts)
+      if (pathname === '/stats') return send(200, stats)
+      if (/^\/(?:[^/]+\/)?manifest\.json$/.test(pathname)) return send(200, manifest(opts))
+      const m = /^\/(?:([^/]+)\/)?stream\/([^/]+)\/([^/]+?)(?:\.json)?$/.exec(pathname)
+      if (m) return await handleStream(opts, m[1], m[2], m[3])
       return send(404, { error: 'not found' })
     } catch (e) {
       console.error('error:', redact(String(e.message)))
@@ -156,8 +108,8 @@ export default {
   },
 }
 
-// Status page. Runs only in the browser: builds the install link from what is typed, nothing typed
-// is sent anywhere. Titles and posters for the recent list come from Stremio's Cinemeta.
+// Status page. Builds the install link in the browser; titles and posters for the recent list
+// come from Stremio's Cinemeta.
 const landing = String.raw`<!doctype html><html lang=en><meta charset=utf-8><meta name=viewport content="width=device-width,initial-scale=1">
 <title>Torrentio Filter</title>
 <style>
@@ -201,9 +153,7 @@ footer code{font-size:13px}
 <details><summary>Settings</summary>
 <label for=link>Torrentio install link, to keep your sort and quality settings</label>
 <input id=link placeholder="stremio://torrentio.strem.fun/.../manifest.json">
-<label for=key>A different TorBox API key (leave empty to use the one set up here)</label>
-<input id=key type=password autocomplete=off>
-<p class=hint>After changing these, copy the link again and reinstall in Stremio.</p>
+<p class=hint>After changing it, copy the link again and reinstall in Stremio.</p>
 </details></section>
 
 <section id=stats class=card hidden><h2>What it's been up to</h2>
@@ -212,25 +162,21 @@ footer code{font-size:13px}
 <div class=num><b id=n-hidden>0</b><span>giant batches hidden</span></div></div>
 <ul id=recent class=recent></ul><p id=since class=hint></p></section>
 
-<footer id=foot hidden>Starts on its own when you log in. In Terminal:
+<footer>Starts on its own when you log in. In Terminal:
 <code>torrentio-filter status</code> · <code>logs</code> · <code>key</code> · <code>uninstall</code></footer>
 </main>
 <script>
 const $ = (id) => document.getElementById(id)
 const DEBRID = /^(torbox|realdebrid|alldebrid|premiumize|debridlink|easydebrid|offcloud|putio)=/i
-let shared = true
 function pill(id, cls, text) { $(id).className = 'pill ' + cls; $(id).textContent = text }
 
 function update() {
-  const link = $('link').value.trim(), key = $('key').value.trim()
-  const m = /torrentio\.strem\.fun\/(?:(.+)\/)?manifest\.json/.exec(link)
-  // Any key in the pasted link is dropped, so an empty key field always means the key set up here.
-  let parts = m && m[1] ? decodeURIComponent(m[1]).split('|').filter((p) => p && !DEBRID.test(p)) : []
-  if (key) parts = parts.concat('torbox=' + key)
+  const m = /torrentio\.strem\.fun\/(?:(.+)\/)?manifest\.json/.exec($('link').value)
+  // The key in a pasted link is dropped: the server adds the one from setup.
+  const parts = m && m[1] ? decodeURIComponent(m[1]).split('|').filter((p) => p && !DEBRID.test(p)) : []
   $('out').textContent = location.origin + (parts.length ? '/' + encodeURIComponent(parts.join('|')) : '') + '/manifest.json'
-  $('hint').textContent = key || shared ? '' : 'No TorBox key is set up, so results won\'t play instantly. Add one under Settings.'
 }
-for (const id of ['link', 'key']) $(id).oninput = update
+$('link').oninput = update
 update()
 
 $('copy').onclick = async () => {
@@ -240,12 +186,10 @@ $('copy').onclick = async () => {
 }
 
 fetch('/health').then((r) => r.json()).then((h) => {
-  pill('s-torrentio', h.torrentio === 200 ? 'ok' : 'bad', h.torrentio === 200 ? 'Torrentio reachable' : 'Torrentio blocked (' + h.torrentio + ')')
-  const tb = { ok: ['ok', 'TorBox key works'], invalid: ['bad', 'TorBox key rejected'], unreachable: ['', 'TorBox not answering'], 'not set': ['', 'No TorBox key'] }[h.torbox]
+  pill('s-torrentio', h.torrentio === 200 ? 'ok' : 'bad', h.torrentio === 200 ? 'Torrentio reachable' : 'Torrentio not answering (' + h.torrentio + ')')
+  const tb = { ok: ['ok', 'TorBox key works'], invalid: ['bad', 'TorBox key rejected'], unreachable: ['', 'TorBox not answering'], 'not set': ['bad', 'No TorBox key'] }[h.torbox]
   pill('s-torbox', tb[0], tb[1])
-  shared = h.sharedKey
-  $('foot').hidden = !h.local
-  update()
+  if (h.torbox === 'invalid' || h.torbox === 'not set') $('hint').textContent = 'Results won\'t play until a working key is set. In Terminal: torrentio-filter key'
 }).catch(() => pill('s-server', 'bad', 'Filter not answering'))
 
 const names = new Map()

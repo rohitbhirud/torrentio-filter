@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { tooBig, fileIdxOf } from './filter.mjs'
+import { tooBig, fileIdxOf, parseFileCounts, hashOf, withKey } from './filter.mjs'
 
 const s = (name, extra = {}) => ({ title: `${name}\nfile.mkv\n👤 10 💾 1 GB ⚙️ X`, ...extra })
 
@@ -32,8 +32,6 @@ test('reads fileIdx from a debrid resolve url', () => {
   assert.equal(tooBig({ title: 'x', url }), true)
 })
 
-import { parseFileCounts, torboxKeyOf, hashOf } from './filter.mjs'
-
 test('exact file count wins over name and position rules', () => {
   const hash = 'b'.repeat(40)
   const complete = { title: 'Naruto [Complete] [Extras]\nep 022.mkv', infoHash: hash, fileIdx: 21 }
@@ -51,9 +49,12 @@ test('parses TorBox checkcached responses in both shapes', () => {
   assert.equal(parseFileCounts(null).size, 0)
 })
 
-test('reads the TorBox key out of a Torrentio config and hashes out of streams', () => {
-  assert.equal(torboxKeyOf('sort=seeders%7Ctorbox=ABC-123'), 'ABC-123')
-  assert.equal(torboxKeyOf('sort=seeders'), null)
+test('swaps any debrid key in a Torrentio config for ours', () => {
+  assert.equal(decodeURIComponent(withKey('sort=seeders%7Ctorbox=OLD%7Crealdebrid=RD', 'NEW')), 'sort=seeders|torbox=NEW')
+  assert.equal(decodeURIComponent(withKey(undefined, 'NEW')), 'torbox=NEW')
+})
+
+test('reads hashes out of streams', () => {
   const h = 'd'.repeat(40)
   assert.equal(hashOf({ url: `https://t/resolve/torbox/K/${h}/null/3/x.mkv` }), h)
 })

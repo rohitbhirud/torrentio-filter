@@ -4,7 +4,7 @@
 import http from 'node:http'
 import fs from 'node:fs'
 import { fileURLToPath, pathToFileURL } from 'node:url'
-import worker from './worker.mjs'
+import addon from './addon.mjs'
 
 export function readConfig(file) {
   if (!fs.existsSync(file)) return {}
@@ -17,18 +17,14 @@ export function readConfig(file) {
 }
 
 export function createServer(env) {
-  const port = Number(env.PORT ?? 7171)
   return http.createServer(async (req, res) => {
     try {
-      const request = new Request(`http://${req.headers.host ?? `127.0.0.1:${port}`}${req.url}`, {
-        method: req.method,
-        headers: { 'User-Agent': req.headers['user-agent'] ?? '' },
-      })
-      const r = await worker.fetch(request, { ...env, LOCAL: '1' })
+      const r = await addon.fetch(new Request(`http://127.0.0.1${req.url}`, { method: req.method }), env)
       res.writeHead(r.status, Object.fromEntries(r.headers))
       res.end(Buffer.from(await r.arrayBuffer()))
     } catch (e) {
-      res.writeHead(400).end()
+      console.error('server error:', e.message)
+      res.writeHead(500).end()
     }
   })
 }
@@ -37,6 +33,6 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   const env = { ...process.env, ...readConfig(fileURLToPath(new URL('./config.env', import.meta.url))) }
   const port = Number(env.PORT ?? 7171)
   createServer(env).listen(port, '127.0.0.1', () => {
-    console.log(`Torrentio filter on http://127.0.0.1:${port}  (max ${env.MAX_FILES ?? 100} files, shared key ${env.TORBOX_KEY ? 'set' : 'not set'})`)
+    console.log(`Torrentio filter on http://127.0.0.1:${port}  (max ${env.MAX_FILES ?? 100} files, TorBox key ${env.TORBOX_KEY ? 'set' : 'not set'})`)
   })
 }

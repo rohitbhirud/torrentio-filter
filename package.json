@@ -1,6 +1,6 @@
 {
   "name": "torrentio-filter",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Stremio add-on in front of Torrentio that hides torrents TorBox can't play. Runs on your Mac at login.",
   "private": true,
   "type": "module",
@@ -12,7 +12,6 @@
   },
   "scripts": {
     "setup": "node cli.mjs setup",
-    "test": "node --test",
-    "deploy": "npx wrangler deploy"
+    "test": "node --test"
   }
 }

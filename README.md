@@ -42,8 +42,8 @@ to keep its sort and quality options. Copy the link again afterwards and reinsta
 The service starts Node by its full path. If you remove that Node version later (nvm, Homebrew
 upgrade), run `torrentio-filter setup` again.
 
-The key never reaches Stremio. Play links point at the filter, which follows Torrentio's and
-TorBox's redirects itself and hands the player only the final video link. The filter listens on
+The key isn't in the Stremio install link, so it doesn't sync to your Stremio account. Play links
+come from Torrentio and carry the key, the same as with plain Torrentio. The filter listens on
 127.0.0.1 only, so other devices on your network can't use it.
 
 Port 7171 is taken? `torrentio-filter setup --port 7272`, then use that port in the Stremio link.
@@ -59,9 +59,13 @@ Port 7171 is taken? `torrentio-filter setup --port 7272`, then use that port in 
 MAX_FILES and HEURISTICS can be added to `config.env`, then `torrentio-filter restart`.
 
 ## Development
-    npm test                     unit tests plus end to end against fake Torrentio, TorBox and CDN servers
-    node cli.mjs run             run in the foreground
+    npm test                     unit tests plus end to end through the server, against fake Torrentio and TorBox
+    TORBOX_KEY=... node server.mjs   run in the foreground
 
-`worker.mjs` is a plain fetch handler: `server.mjs` runs it on Node, and `wrangler.jsonc` deploys
-it to Cloudflare Workers. Workers doesn't work for this today: Torrentio's firewall blocks
-Cloudflare's servers (`/health` shows `"torrentio": 403`). See CLOUDFLARE-WORKERS-PLAN.md.
+- `filter.mjs`: the rules that decide what's too big
+- `addon.mjs`: the Stremio add-on and the status page
+- `server.mjs`: serves it on 127.0.0.1
+- `cli.mjs`: the `torrentio-filter` command
+
+Why not a hosted server: Torrentio's firewall blocks cloud hosts. Cloudflare Workers got
+403 "Attention Required" while a home connection gets 200, so each person runs their own copy.
