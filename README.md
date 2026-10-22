@@ -7,7 +7,7 @@ It runs quietly on your Mac and starts by itself when you log in.
 ## Install (2 minutes)
 You need Node 18 or newer (`node -v`; if missing: `brew install node`) and a TorBox API key.
 
-    git clone git@github.com:rohitbhirud/torrentio-filter.git
+    git clone https://github.com/rohitbhirud/torrentio-filter.git
     cd torrentio-filter
     npm install -g .
     torrentio-filter setup
