@@ -84,10 +84,15 @@ export function redact(s) {
   return s.replace(new RegExp(`(${DEBRID_SERVICES})=[^|%/&]+`, 'gi'), '$1=***')
 }
 
-// The Torrentio config to send upstream: the user's options, with any debrid key swapped for this one.
-export function withKey(config, key) {
-  const parts = config ? decodeURIComponent(config).split('|').filter((p) => p && !DEBRID.test(p)) : []
-  return encodeURIComponent([...parts, `torbox=${key}`].join('|'))
+// The Torrentio config to send upstream: the user's options, plus a size limit and priority
+// language unless they set their own, with any debrid key swapped for this one.
+export function torrentioConfig(config, { key, maxSize, language } = {}) {
+  let parts = config ? decodeURIComponent(config).split('|').filter(Boolean) : []
+  const has = (name) => parts.some((p) => p.toLowerCase().startsWith(`${name}=`))
+  if (maxSize && !has('sizefilter')) parts.push(`sizefilter=${maxSize}`)
+  if (language && !has('language')) parts.push(`language=${language}`)
+  if (key) parts = [...parts.filter((p) => !DEBRID.test(p)), `torbox=${key}`]
+  return parts.length ? encodeURIComponent(parts.join('|')) : ''
 }
 
 // Does TorBox accept this key? 'ok', 'invalid', 'unreachable' or 'not set'.

@@ -33,7 +33,7 @@ const torbox = await listen(http.createServer((req, res) => {
   res.end(JSON.stringify({ success: true, data: { [H_BIG]: { files: files(500) }, [H_PACK]: { files: files(30) } } }))
 }))
 
-const start = (env) => listen(createServer({ UPSTREAM: at(torrentio), TORBOX_API: at(torbox), ...env }))
+const start = (env) => listen(createServer({ UPSTREAM: at(torrentio), TORBOX_API: at(torbox), MAX_SIZE: 'off', LANGUAGE: 'off', ...env }))
 const withKey = await start({ TORBOX_KEY: KEY })
 const noKey = await start({})
 const titles = async (r) => (await r.json()).streams.map((s) => s.title.split('\n')[0])
@@ -81,6 +81,16 @@ test('tells a rejected key apart from a rate-limited TorBox', async () => {
     assert.equal((await (await fetch(`${at(server)}/health`)).json()).torbox, verdict)
     server.close()
   }
+})
+
+test('asks Torrentio for files up to 10GB with Hindi first by default', async () => {
+  const server = await start({ MAX_SIZE: undefined, LANGUAGE: undefined, TORBOX_KEY: KEY })
+  await fetch(`${at(server)}/stream/movie/tt2.json`)
+  assert.equal(seen.config, `sizefilter=10GB|language=hindi|torbox=${KEY}`)
+  const custom = await start({ MAX_SIZE: '4 gb', LANGUAGE: 'Tamil,hindi' })
+  await fetch(`${at(custom)}/stream/movie/tt2.json`)
+  assert.equal(seen.config, 'sizefilter=4GB|language=tamil,hindi')
+  ;[server, custom].forEach((s) => s.close())
 })
 
 test('an invalid MAX_FILES falls back to 100', async () => {

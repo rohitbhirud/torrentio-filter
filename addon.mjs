@@ -2,14 +2,22 @@
 // torrents. A plain fetch handler; server.mjs serves it on 127.0.0.1.
 //
 // Install URL: /manifest.json, or /<torrentio config>/manifest.json to keep Torrentio's sort and
-// quality options. Any debrid key in the config is replaced by TORBOX_KEY from config.env.
-import { tooBig, hashOf, parseFileCounts, redact, withKey, checkTorboxKey } from './filter.mjs'
+// quality options. Any debrid key in the config is replaced by TORBOX_KEY from config.env, and
+// Torrentio is asked for files up to MAX_SIZE with LANGUAGE results first, unless the config says otherwise.
+import { tooBig, hashOf, parseFileCounts, redact, torrentioConfig, checkTorboxKey } from './filter.mjs'
 
 const TIMEOUT_MS = 20000
 const COUNT_TTL_MS = 24 * 3600 * 1000
 const COUNT_CACHE_MAX = 20000
 const countCache = new Map() // hash -> { count, at }, oldest first
 const stats = { since: Date.now(), lookups: 0, found: 0, hidden: 0, recent: [] } // for the status page
+
+// A setting passed on to Torrentio: the fallback when unset or invalid, null when "off".
+function option(value, fallback, valid) {
+  const v = String(value ?? fallback).replace(/\s/g, '')
+  if (!v || /^(off|0)$/i.test(v)) return null
+  return valid.test(v) ? v : fallback
+}
 
 function settings(env) {
   const maxFiles = Number(env.MAX_FILES)
@@ -19,6 +27,8 @@ function settings(env) {
     key: env.TORBOX_KEY || null,
     maxFiles: Number.isInteger(maxFiles) && maxFiles > 0 ? maxFiles : 100,
     heuristics: env.HEURISTICS !== '0',
+    maxSize: option(env.MAX_SIZE, '10GB', /^\d+(\.\d+)?(MB|GB|TB)$/i)?.toUpperCase() ?? null,
+    language: option(env.LANGUAGE, 'hindi', /^[a-z]+(,[a-z]+)*$/i)?.toLowerCase() ?? null,
   }
 }
 
@@ -26,7 +36,9 @@ const manifest = (opts) => ({
   id: 'local.torrentio.filtered',
   version: '0.4.0',
   name: `Torrentio (max ${opts.maxFiles} files)`,
-  description: `Torrentio results, minus torrents with more than ${opts.maxFiles} files.`,
+  description: `Torrentio results, minus torrents with more than ${opts.maxFiles} files`
+    + (opts.maxSize ? ` and files over ${opts.maxSize}` : '')
+    + (opts.language ? `, ${opts.language} first.` : '.'),
   catalogs: [],
   resources: [{ name: 'stream', types: ['movie', 'series', 'anime'], idPrefixes: ['tt', 'kitsu'] }],
   types: ['movie', 'series', 'anime', 'other'],
@@ -65,7 +77,7 @@ async function fileCounts(hashes, opts) {
 }
 
 async function handleStream(opts, config, type, id) {
-  const upstreamConfig = opts.key ? withKey(config, opts.key) : config
+  const upstreamConfig = torrentioConfig(config, opts)
   const r = await fetch(`${opts.upstream}${upstreamConfig ? `/${upstreamConfig}` : ''}/stream/${type}/${id}.json`, {
     signal: AbortSignal.timeout(TIMEOUT_MS),
   })
@@ -165,7 +177,8 @@ footer code{font-size:13px}
 <div class=urlrow><code id=out>&nbsp;</code><button id=copy>Copy link</button></div>
 <p id=hint class=hint></p>
 <details><summary>Optional: your own Torrentio settings</summary>
-<p class=hint>Not needed. Torrentio is built in and uses its default settings. Only if you changed sorting or
+<p class=hint>Not needed. Torrentio is built in and uses its default settings, plus a size limit and a priority
+language (10GB and Hindi unless config.env says otherwise). Only if you changed sorting or
 quality filters on Torrentio's configure page, paste its install link here, then click Install again.</p>
 <label for=link>Torrentio install link</label>
 <input id=link placeholder="stremio://torrentio.strem.fun/.../manifest.json">

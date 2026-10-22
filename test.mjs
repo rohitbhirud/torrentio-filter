@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { tooBig, fileIdxOf, parseFileCounts, hashOf, withKey, redact } from './filter.mjs'
+import { tooBig, fileIdxOf, parseFileCounts, hashOf, torrentioConfig, redact } from './filter.mjs'
 
 const s = (name, extra = {}) => ({ title: `${name}\nfile.mkv\n👤 10 💾 1 GB ⚙️ X`, ...extra })
 
@@ -50,8 +50,17 @@ test('parses TorBox checkcached responses in both shapes', () => {
 })
 
 test('swaps any debrid key in a Torrentio config for ours', () => {
-  assert.equal(decodeURIComponent(withKey('sort=seeders%7Ctorbox=OLD%7Crealdebrid=RD', 'NEW')), 'sort=seeders|torbox=NEW')
-  assert.equal(decodeURIComponent(withKey(undefined, 'NEW')), 'torbox=NEW')
+  const cfg = (config, opts) => decodeURIComponent(torrentioConfig(config, opts))
+  assert.equal(cfg('sort=seeders%7Ctorbox=OLD%7Crealdebrid=RD', { key: 'NEW' }), 'sort=seeders|torbox=NEW')
+  assert.equal(cfg(undefined, { key: 'NEW' }), 'torbox=NEW')
+  assert.equal(cfg('sort=seeders%7Ctorbox=OLD', {}), 'sort=seeders|torbox=OLD') // no key of ours: keep theirs
+  assert.equal(cfg(undefined, {}), '')
+})
+
+test('adds the size limit and language unless the config has its own', () => {
+  const cfg = (config) => decodeURIComponent(torrentioConfig(config, { key: 'K', maxSize: '10GB', language: 'hindi' }))
+  assert.equal(cfg(undefined), 'sizefilter=10GB|language=hindi|torbox=K')
+  assert.equal(cfg('sizefilter=5GB%7CLanguage=tamil'), 'sizefilter=5GB|Language=tamil|torbox=K')
 })
 
 test('reads hashes out of streams', () => {

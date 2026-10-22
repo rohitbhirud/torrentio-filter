@@ -2,6 +2,7 @@
 
 A Stremio add-on that sits in front of Torrentio and hides torrents with more than 100 files.
 TorBox zips those giant batches, so Torrentio can't play them and they only clutter the list.
+It also hides files over 10 GB and puts Hindi results first.
 It runs quietly on your Mac and starts by itself when you log in.
 
 ## Install (2 minutes)
@@ -19,7 +20,8 @@ Then click **Install in Stremio** on that page, and **Install** in the window St
 (Or in Stremio: **Add-ons** → paste `http://127.0.0.1:7171/manifest.json` into the search box.)
 Uninstall the original Torrentio so results don't show up twice.
 
-There's no Torrentio link to enter: Torrentio is built in, with its default settings.
+There's no Torrentio link to enter: Torrentio is built in, with its default settings plus the
+10 GB limit and Hindi first.
 
 ## Everyday commands
     torrentio-filter status      is it running, does Torrentio answer, does the key work
@@ -60,7 +62,11 @@ Port 7171 is taken? `torrentio-filter setup --port 7272`, then use that port in 
    - Episode ranges in the name wider than MAX_FILES (001-574), or words like Batch/Complete/Extras with no range.
    - HEURISTICS=0 turns off the name rules and keeps only the fileIdx rule.
 
-MAX_FILES and HEURISTICS can be added to `config.env`, then `torrentio-filter restart`.
+3. Torrentio itself drops files over MAX_SIZE (default `10GB`) and lists LANGUAGE results first
+   (default `hindi`; several work, like `hindi,tamil`). Set either to `off` to turn it off.
+   A Torrentio link pasted on the status page with its own size filter or language wins.
+
+MAX_FILES, HEURISTICS, MAX_SIZE and LANGUAGE can be added to `config.env`, then `torrentio-filter restart`.
 
 ## Development
     npm test                     unit tests plus end to end through the server, against fake Torrentio and TorBox
