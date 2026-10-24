@@ -83,10 +83,10 @@ test('tells a rejected key apart from a rate-limited TorBox', async () => {
   }
 })
 
-test('asks Torrentio for files up to 10GB with Hindi first by default', async () => {
+test('asks Torrentio for files up to 20GB with Hindi first by default', async () => {
   const server = await start({ MAX_SIZE: undefined, LANGUAGE: undefined, TORBOX_KEY: KEY })
   await fetch(`${at(server)}/stream/movie/tt2.json`)
-  assert.equal(seen.config, `sizefilter=10GB|language=hindi|torbox=${KEY}`)
+  assert.equal(seen.config, `sizefilter=20GB|language=hindi|torbox=${KEY}`)
   const custom = await start({ MAX_SIZE: '4 gb', LANGUAGE: 'Tamil,hindi' })
   await fetch(`${at(custom)}/stream/movie/tt2.json`)
   assert.equal(seen.config, 'sizefilter=4GB|language=tamil,hindi')

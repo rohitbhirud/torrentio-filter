@@ -27,7 +27,7 @@ function settings(env) {
     key: env.TORBOX_KEY || null,
     maxFiles: Number.isInteger(maxFiles) && maxFiles > 0 ? maxFiles : 100,
     heuristics: env.HEURISTICS !== '0',
-    maxSize: option(env.MAX_SIZE, '10GB', /^\d+(\.\d+)?(MB|GB|TB)$/i)?.toUpperCase() ?? null,
+    maxSize: option(env.MAX_SIZE, '20GB', /^\d+(\.\d+)?(MB|GB|TB)$/i)?.toUpperCase() ?? null,
     language: option(env.LANGUAGE, 'hindi', /^[a-z]+(,[a-z]+)*$/i)?.toLowerCase() ?? null,
   }
 }
@@ -178,7 +178,7 @@ footer code{font-size:13px}
 <p id=hint class=hint></p>
 <details><summary>Optional: your own Torrentio settings</summary>
 <p class=hint>Not needed. Torrentio is built in and uses its default settings, plus a size limit and a priority
-language (10GB and Hindi unless config.env says otherwise). Only if you changed sorting or
+language (20GB and Hindi unless config.env says otherwise). Only if you changed sorting or
 quality filters on Torrentio's configure page, paste its install link here, then click Install again.</p>
 <label for=link>Torrentio install link</label>
 <input id=link placeholder="stremio://torrentio.strem.fun/.../manifest.json">
