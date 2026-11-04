@@ -4,12 +4,15 @@
 // Install URL: /manifest.json, or /<torrentio config>/manifest.json to keep Torrentio's sort and
 // quality options. Any debrid key in the config is replaced by TORBOX_KEY from config.env, and
 // Torrentio is asked for files up to MAX_SIZE with LANGUAGE results first, unless the config says otherwise.
-import { tooBig, isCached, hashOf, parseFileCounts, redact, torrentioConfig, checkTorboxKey } from './filter.mjs'
+import { tooBig, isCached, hashOf, parseFileCounts, libraryHashes, highlightLibrary, redact, torrentioConfig, checkTorboxKey } from './filter.mjs'
 
 const TIMEOUT_MS = 20000
 const COUNT_TTL_MS = 24 * 3600 * 1000
 const COUNT_CACHE_MAX = 20000
+const LIBRARY_TIMEOUT_MS = 5000
+const LIBRARY_TTL_MS = 60 * 1000
 const countCache = new Map() // hash -> { count, at }, oldest first
+let libraryCache = { key: null, hashes: new Set(), at: 0 }
 const stats = { since: Date.now(), lookups: 0, found: 0, hidden: 0, recent: [] } // for the status page
 
 // A setting passed on to Torrentio: the fallback when unset or invalid, null when "off".
@@ -79,6 +82,34 @@ async function fileCounts(hashes, opts) {
   return out
 }
 
+// bypass_cache makes TorBox answer with the current list; our own cache limits how often we ask.
+async function fetchLibrary(opts) {
+  const r = await fetch(`${opts.torbox}/v1/api/torrents/mylist?bypass_cache=true`, {
+    headers: { Authorization: `Bearer ${opts.key}` },
+    signal: AbortSignal.timeout(LIBRARY_TIMEOUT_MS),
+  })
+  if (!r.ok) throw new Error(`TorBox ${r.status}`)
+  const json = await r.json()
+  if (!json.success) throw new Error(`TorBox ${json.error}`)
+  return libraryHashes(json)
+}
+
+// Hashes in the user's TorBox, empty when the list can't be read. A failure is cached too, so a
+// TorBox outage costs one 5 second wait per minute, not one per request.
+async function myLibrary(opts) {
+  if (!opts.key) return new Set()
+  const { key, hashes, at } = libraryCache
+  if (key === opts.key && Date.now() - at < LIBRARY_TTL_MS) return hashes
+  let latest = new Set()
+  try {
+    latest = await fetchLibrary(opts)
+  } catch (e) {
+    console.error('library lookup failed:', redact(String(e.message)))
+  }
+  libraryCache = { key: opts.key, hashes: latest, at: Date.now() }
+  return latest
+}
+
 async function handleStream(opts, config, type, id) {
   const upstreamConfig = torrentioConfig(config, opts)
   const r = await fetch(`${opts.upstream}${upstreamConfig ? `/${upstreamConfig}` : ''}/stream/${type}/${id}.json`, {
@@ -91,13 +122,15 @@ async function handleStream(opts, config, type, id) {
   const playable = (s) => !tooBig(s, counts, opts) && (!opts.cachedOnly || isCached(s, counts))
   const kept = streams.filter(playable)
   const hidden = streams.length - kept.length
+  const library = await myLibrary(opts)
+  const owned = kept.filter((s) => library.has(hashOf(s))).length
   const name = decodeURIComponent(id)
   stats.lookups++
   stats.found += streams.length
   stats.hidden += hidden
   stats.recent = [{ at: Date.now(), type, id: name, found: streams.length, hidden }, ...stats.recent].slice(0, 8)
-  console.log(`${type}/${name}: ${streams.length} from upstream, exact file count for ${counts.size}, ${hidden} dropped, ${kept.length} kept`)
-  return send(200, { ...body, streams: kept })
+  console.log(`${type}/${name}: ${streams.length} from upstream, exact file count for ${counts.size}, ${hidden} dropped, ${kept.length} kept, ${owned} in your TorBox`)
+  return send(200, { ...body, streams: highlightLibrary(kept, library) })
 }
 
 async function health(opts) {

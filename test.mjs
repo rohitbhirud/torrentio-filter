@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { tooBig, isCached, fileIdxOf, parseFileCounts, hashOf, torrentioConfig, redact } from './filter.mjs'
+import { tooBig, isCached, fileIdxOf, parseFileCounts, hashOf, torrentioConfig, redact, libraryHashes, highlightLibrary } from './filter.mjs'
 
 const s = (name, extra = {}) => ({ title: `${name}\nfile.mkv\n👤 10 💾 1 GB ⚙️ X`, ...extra })
 
@@ -105,4 +105,23 @@ test('cached means TorBox has it, or Torrentio tagged it [TB+]', () => {
   assert.equal(isCached({ infoHash: h, name: '[TB download] Torrentio' }, new Map([[h, 3]])), true)
   assert.equal(isCached({ infoHash: h, name: '[TB+] Torrentio\n1080p' }), true)
   assert.equal(isCached({ infoHash: h, name: '[TB download] Torrentio' }), false)
+})
+
+test('reads the TorBox library as lowercase hashes', () => {
+  const library = libraryHashes({ data: [{ hash: 'ABC' }, { hash: 'def' }, { name: 'no hash' }, null] })
+  assert.deepEqual([...library], ['abc', 'def'])
+  assert.equal(libraryHashes({ data: null }).size, 0) // an empty account
+})
+
+test('moves library streams to the top with a label, keeping order in both groups', () => {
+  const [a, b, c, d] = ['a', 'b', 'c', 'd'].map((x) => x.repeat(40))
+  const fromUrl = { name: 'U', url: `https://torrentio.strem.fun/resolve/torbox/KEY/${c}/null/0/ep.mkv` }
+  const streams = [{ name: 'A', infoHash: a }, { name: 'B', infoHash: b.toUpperCase() }, fromUrl, { name: 'D', infoHash: d }]
+  const names = highlightLibrary(streams, new Set([c, b])).map((x) => x.name)
+  assert.deepEqual(names, ['⭐ MY TORBOX\nB', '⭐ MY TORBOX\nU', 'A', 'D'])
+})
+
+test('an empty library leaves the streams as they were', () => {
+  const streams = [{ name: 'A', infoHash: 'a'.repeat(40) }, { name: 'No hash' }]
+  assert.deepEqual(highlightLibrary(streams, new Set()), streams)
 })

@@ -8,7 +8,12 @@ const H_BIG = 'a'.repeat(40) // cached, 500 files
 const H_PACK = 'b'.repeat(40) // cached, 30 files
 const H_NEW = 'c'.repeat(40) // not cached, title says Complete
 const KEY = 'TEST-KEY'
-const seen = { config: null, auth: null, hashes: null }
+const seen = { config: null, auth: null, hashes: null, listCalls: 0, listAuth: null }
+const LISTS = { // what the fake TorBox lists, by API key
+  'LIB-PACK': [{ hash: H_PACK.toUpperCase() }],
+  'LIB-BIG': [{ hash: H_BIG }],
+  'LIB-CACHE': [{ hash: H_PACK }],
+}
 
 const listen = (server) => new Promise((res) => server.listen(0, '127.0.0.1', () => res(server)))
 const at = (s) => `http://127.0.0.1:${s.address().port}`
@@ -26,6 +31,15 @@ const torbox = await listen(http.createServer((req, res) => {
     if (req.headers.authorization === 'Bearer RATE-LIMITED') return res.writeHead(429).end('{}')
     res.writeHead(good ? 200 : 403) // TorBox answers a bad key with 403 BAD_TOKEN
     return res.end(JSON.stringify({ success: good, error: good ? null : 'BAD_TOKEN' }))
+  }
+  if (req.url.startsWith('/v1/api/torrents/mylist')) {
+    const key = req.headers.authorization.replace('Bearer ', '')
+    seen.listCalls++
+    seen.listAuth = req.headers.authorization
+    if (key === 'LIB-HANG') return // never answers
+    if (key === 'LIB-DOWN') return res.writeHead(500).end('{}')
+    if (key === 'LIB-REFUSED') return res.end(JSON.stringify({ success: false, error: 'BAD_TOKEN' }))
+    return res.end(JSON.stringify({ success: true, data: LISTS[key] ?? [] }))
   }
   seen.auth = req.headers.authorization
   seen.hashes = new URL(req.url, 'http://x').searchParams.getAll('hash')
@@ -104,6 +118,73 @@ test('an invalid MAX_FILES falls back to 100', async () => {
   const server = await start({ MAX_FILES: 'lots' })
   assert.equal((await (await fetch(`${at(server)}/manifest.json`)).json()).name, 'Torrentio (max 100 files)')
   server.close()
+})
+
+// Heuristics off and a high MAX_FILES keep all three streams, so the order is easy to read.
+const startAll = (key) => start({ TORBOX_KEY: key, MAX_FILES: '1000', HEURISTICS: '0' })
+const streamsFrom = async (server) => (await (await fetch(`${at(server)}/stream/series/tt1:1:22.json`)).json()).streams
+const firstLines = (streams) => streams.map((s) => s.title.split('\n')[0])
+const ORIGINAL = ['Big pack', 'Naruto [Complete] [Extras]', 'Show [Complete]']
+
+test('puts streams from the TorBox library first, labelled', async (t) => {
+  const server = await startAll('LIB-PACK')
+  t.after(() => server.close())
+  const streams = await streamsFrom(server)
+  assert.deepEqual(firstLines(streams), ['Naruto [Complete] [Extras]', 'Big pack', 'Show [Complete]'])
+  assert.deepEqual(streams.map((s) => s.name), ['⭐ MY TORBOX\nT', 'T', 'T'])
+  assert.equal(seen.listAuth, 'Bearer LIB-PACK')
+})
+
+test('a library stream that fails the file filter stays hidden', async (t) => {
+  const server = await start({ TORBOX_KEY: 'LIB-BIG' }) // 500 files, over the limit of 100
+  t.after(() => server.close())
+  assert.deepEqual(firstLines(await streamsFrom(server)), ['Naruto [Complete] [Extras]'])
+})
+
+test('asks TorBox for the library at most once a minute', async (t) => {
+  const server = await startAll('LIB-CACHE')
+  t.after(() => server.close())
+  const before = seen.listCalls
+  await streamsFrom(server)
+  await streamsFrom(server)
+  assert.equal(seen.listCalls - before, 1)
+  const now = Date.now()
+  t.mock.method(Date, 'now', () => now + 61000)
+  assert.equal((await streamsFrom(server))[0].name, '⭐ MY TORBOX\nT')
+  assert.equal(seen.listCalls - before, 2)
+})
+
+test('a failed library lookup is logged without the key and changes nothing', async (t) => {
+  for (const key of ['LIB-DOWN', 'LIB-REFUSED']) {
+    const errors = t.mock.method(console, 'error', () => {})
+    const server = await startAll(key)
+    t.after(() => server.close())
+    const before = seen.listCalls
+    const streams = await streamsFrom(server)
+    assert.deepEqual(firstLines(streams), ORIGINAL)
+    assert.ok(streams.every((s) => s.name === 'T'))
+    const logged = errors.mock.calls.map((c) => c.arguments.join(' ')).join('\n')
+    assert.match(logged, /library lookup failed/)
+    assert.ok(!logged.includes(key))
+    await streamsFrom(server) // the failure is cached too, so no second wait
+    assert.equal(seen.listCalls - before, 1)
+    errors.mock.restore()
+  }
+})
+
+test('gives up on a library lookup after 5 seconds and keeps the streams', async (t) => {
+  const realTimeout = AbortSignal.timeout.bind(AbortSignal)
+  const timeouts = []
+  t.mock.method(AbortSignal, 'timeout', (ms) => { // shorten the wait so the test stays quick
+    timeouts.push(ms)
+    return realTimeout(ms === 5000 ? 50 : ms)
+  })
+  const errors = t.mock.method(console, 'error', () => {})
+  const server = await startAll('LIB-HANG')
+  t.after(() => server.close())
+  assert.deepEqual(firstLines(await streamsFrom(server)), ORIGINAL)
+  assert.ok(timeouts.includes(5000))
+  assert.match(errors.mock.calls[0].arguments.join(' '), /library lookup failed/)
 })
 
 test.after(() => [torrentio, torbox, withKey, noKey].forEach((s) => s.close()))

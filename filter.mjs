@@ -82,6 +82,19 @@ export function parseFileCounts(json) {
   return out
 }
 
+// Reads { data: [{ hash }] } from TorBox's torrent list into a Set of lowercase hashes.
+export function libraryHashes(json) {
+  const torrents = Array.isArray(json?.data) ? json.data : []
+  return new Set(torrents.map((t) => String(t?.hash ?? '').toLowerCase()).filter(Boolean))
+}
+
+// Streams already in the user's TorBox go first and get a label. Each group keeps its order.
+export function highlightLibrary(streams, library) {
+  const inLibrary = (s) => library.has(hashOf(s))
+  const mine = streams.filter(inLibrary).map((s) => ({ ...s, name: `⭐ MY TORBOX\n${s.name ?? ''}` }))
+  return [...mine, ...streams.filter((s) => !inLibrary(s))]
+}
+
 // Torrentio config options that hold a debrid key.
 const DEBRID_SERVICES = 'torbox|realdebrid|alldebrid|premiumize|debridlink|easydebrid|offcloud|putio'
 const DEBRID = new RegExp(`^(${DEBRID_SERVICES})=`, 'i')

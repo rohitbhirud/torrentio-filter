@@ -68,6 +68,10 @@ Port 7171 is taken? `torrentio-filter setup --port 7272`, then use that port in 
 
 4. Only streams TorBox already has cached are shown (instant play). CACHED_ONLY=0 shows uncached ones too.
 
+5. Streams already in your TorBox account move to the top, marked `⭐ MY TORBOX`. The list comes from
+   GET /v1/api/torrents/mylist, is kept for 60 seconds, and never hides anything. If TorBox doesn't
+   answer within 5 seconds, the streams show as usual, unmarked.
+
 MAX_FILES, HEURISTICS, CACHED_ONLY, MAX_SIZE and LANGUAGE can be added to `config.env`, then `torrentio-filter restart`.
 
 ## Development
