@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { tooBig, fileIdxOf, parseFileCounts, hashOf, torrentioConfig, redact } from './filter.mjs'
+import { tooBig, isCached, fileIdxOf, parseFileCounts, hashOf, torrentioConfig, redact } from './filter.mjs'
 
 const s = (name, extra = {}) => ({ title: `${name}\nfile.mkv\n👤 10 💾 1 GB ⚙️ X`, ...extra })
 
@@ -98,4 +98,11 @@ test('a stream with a malformed url does not throw', () => {
 
 test('redacts keys from log lines', () => {
   assert.equal(redact('GET /sort=x|torbox=ABC|realdebrid=DEF%7Cy'), 'GET /sort=x|torbox=***|realdebrid=***%7Cy')
+})
+
+test('cached means TorBox has it, or Torrentio tagged it [TB+]', () => {
+  const h = '1'.repeat(40)
+  assert.equal(isCached({ infoHash: h, name: '[TB download] Torrentio' }, new Map([[h, 3]])), true)
+  assert.equal(isCached({ infoHash: h, name: '[TB+] Torrentio\n1080p' }), true)
+  assert.equal(isCached({ infoHash: h, name: '[TB download] Torrentio' }), false)
 })

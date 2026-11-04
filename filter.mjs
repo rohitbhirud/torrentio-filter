@@ -59,6 +59,12 @@ export function tooBig(stream, counts = new Map(), opts = defaults) {
   return opts.heuristics && looksLikeBatch(stream, opts)
 }
 
+// Can TorBox play this right away? counts only holds torrents TorBox has cached, so a hash in it
+// means cached. Torrentio's "[TB+]" tag in the name covers a TorBox lookup that failed.
+export function isCached(stream, counts = new Map()) {
+  return counts.has(hashOf(stream)) || String(stream.name ?? '').includes('+]')
+}
+
 // Reads { data: { <hash>: { files: [...] } } } or { data: [{ hash, files: [...] }] }.
 const ARCHIVE = /\.(zip|rar|7z|tar|tgz)$/i
 

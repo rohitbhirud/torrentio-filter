@@ -4,7 +4,7 @@
 // Install URL: /manifest.json, or /<torrentio config>/manifest.json to keep Torrentio's sort and
 // quality options. Any debrid key in the config is replaced by TORBOX_KEY from config.env, and
 // Torrentio is asked for files up to MAX_SIZE with LANGUAGE results first, unless the config says otherwise.
-import { tooBig, hashOf, parseFileCounts, redact, torrentioConfig, checkTorboxKey } from './filter.mjs'
+import { tooBig, isCached, hashOf, parseFileCounts, redact, torrentioConfig, checkTorboxKey } from './filter.mjs'
 
 const TIMEOUT_MS = 20000
 const COUNT_TTL_MS = 24 * 3600 * 1000
@@ -27,6 +27,8 @@ function settings(env) {
     key: env.TORBOX_KEY || null,
     maxFiles: Number.isInteger(maxFiles) && maxFiles > 0 ? maxFiles : 100,
     heuristics: env.HEURISTICS !== '0',
+    // Without a key nothing can be checked, so everything would be hidden.
+    cachedOnly: Boolean(env.TORBOX_KEY) && env.CACHED_ONLY !== '0',
     maxSize: option(env.MAX_SIZE, '20GB', /^\d+(\.\d+)?(MB|GB|TB)$/i)?.toUpperCase() ?? null,
     language: option(env.LANGUAGE, 'hindi', /^[a-z]+(,[a-z]+)*$/i)?.toLowerCase() ?? null,
   }
@@ -38,6 +40,7 @@ const manifest = (opts) => ({
   name: `Torrentio (max ${opts.maxFiles} files)`,
   description: `Torrentio results, minus torrents with more than ${opts.maxFiles} files`
     + (opts.maxSize ? ` and files over ${opts.maxSize}` : '')
+    + (opts.cachedOnly ? ', TorBox-cached only' : '')
     + (opts.language ? `, ${opts.language} first.` : '.'),
   catalogs: [],
   resources: [{ name: 'stream', types: ['movie', 'series', 'anime'], idPrefixes: ['tt', 'kitsu'] }],
@@ -85,7 +88,8 @@ async function handleStream(opts, config, type, id) {
   const body = await r.json()
   const streams = body.streams ?? []
   const counts = opts.key ? await fileCounts(streams.map(hashOf).filter(Boolean), opts) : new Map()
-  const kept = streams.filter((s) => !tooBig(s, counts, opts))
+  const playable = (s) => !tooBig(s, counts, opts) && (!opts.cachedOnly || isCached(s, counts))
+  const kept = streams.filter(playable)
   const hidden = streams.length - kept.length
   const name = decodeURIComponent(id)
   stats.lookups++
@@ -187,7 +191,7 @@ quality filters on Torrentio's configure page, paste its install link here, then
 <section id=stats class=card hidden><h2>What it's been up to</h2>
 <div class=nums><div class=num><b id=n-lookups>0</b><span>lookups</span></div>
 <div class=num><b id=n-found>0</b><span>results checked</span></div>
-<div class=num><b id=n-hidden>0</b><span>giant batches hidden</span></div></div>
+<div class=num><b id=n-hidden>0</b><span>hidden</span></div></div>
 <ul id=recent class=recent></ul><p id=since class=hint></p></section>
 
 <footer>Starts on its own when you log in. In Terminal:

@@ -66,7 +66,9 @@ Port 7171 is taken? `torrentio-filter setup --port 7272`, then use that port in 
    (default `hindi`; several work, like `hindi,tamil`). Set either to `off` to turn it off.
    A Torrentio link pasted on the status page with its own size filter or language wins.
 
-MAX_FILES, HEURISTICS, MAX_SIZE and LANGUAGE can be added to `config.env`, then `torrentio-filter restart`.
+4. Only streams TorBox already has cached are shown (instant play). CACHED_ONLY=0 shows uncached ones too.
+
+MAX_FILES, HEURISTICS, CACHED_ONLY, MAX_SIZE and LANGUAGE can be added to `config.env`, then `torrentio-filter restart`.
 
 ## Development
     npm test                     unit tests plus end to end through the server, against fake Torrentio and TorBox

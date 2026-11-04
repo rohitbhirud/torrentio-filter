@@ -33,7 +33,7 @@ const torbox = await listen(http.createServer((req, res) => {
   res.end(JSON.stringify({ success: true, data: { [H_BIG]: { files: files(500) }, [H_PACK]: { files: files(30) } } }))
 }))
 
-const start = (env) => listen(createServer({ UPSTREAM: at(torrentio), TORBOX_API: at(torbox), MAX_SIZE: 'off', LANGUAGE: 'off', ...env }))
+const start = (env) => listen(createServer({ UPSTREAM: at(torrentio), TORBOX_API: at(torbox), MAX_SIZE: 'off', LANGUAGE: 'off', CACHED_ONLY: '0', ...env }))
 const withKey = await start({ TORBOX_KEY: KEY })
 const noKey = await start({})
 const titles = async (r) => (await r.json()).streams.map((s) => s.title.split('\n')[0])
@@ -51,6 +51,13 @@ test('a key in the install link is replaced by the one from setup', async () => 
   assert.equal(seen.config, `sort=seeders|torbox=${KEY}`)
   await fetch(`${at(withKey)}/stream/movie/tt2.json`)
   assert.equal(seen.config, `torbox=${KEY}`)
+})
+
+test('cached-only keeps what TorBox has cached, or what Torrentio tags [TB+]', async () => {
+  const server = await start({ TORBOX_KEY: KEY, CACHED_ONLY: undefined, MAX_FILES: '1000' })
+  const r = await fetch(`${at(server)}/stream/series/tt1:1:22.json`)
+  assert.deepEqual(await titles(r), ['Big pack', 'Naruto [Complete] [Extras]']) // H_NEW is not cached
+  server.close()
 })
 
 test('works without a TorBox key (name rules only)', async () => {
